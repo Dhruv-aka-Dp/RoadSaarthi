@@ -37,22 +37,11 @@ export default function useMapMarkers(reports) {
           lat: coordinates.lat,
           lng: coordinates.lng,
           status: report.status || "pending",
+          priority: report.priority || "low",
         };
       })
       .filter(Boolean);
 
-    return reportsWithCoordinates.map((marker) => {
-      const nearbyCount = reportsWithCoordinates.filter((candidate) => {
-        const lngDistance = Math.abs(candidate.lng - marker.lng);
-        const latDistance = Math.abs(candidate.lat - marker.lat);
-
-        return lngDistance <= 0.008 && latDistance <= 0.008;
-      }).length;
-
-      return {
-        ...marker,
-        nearbyCount,
-      };
-    });
+    return reportsWithCoordinates;
   }, [reports]);
 }

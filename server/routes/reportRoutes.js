@@ -4,11 +4,15 @@ const {
   getReports,
   assignReport,
   resolveReport,
+  getHotspots,
 } = require('../controllers/reportController');
 
 const upload = require('../middleware/upload');
 
 const router = express.Router();
+
+router.route('/hotspots')
+  .get(getHotspots);
 
 router.route('/')
   .get(getReports)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, memo } from "react";
 import { divIcon, latLngBounds } from "leaflet";
 import {
   MapContainer,
@@ -6,6 +6,7 @@ import {
   Popup,
   TileLayer,
   ZoomControl,
+  Circle,
   useMap,
 } from "react-leaflet";
 import StatusBadge from "./StatusBadge";
@@ -50,11 +51,12 @@ function MapViewportController({ markers, selectedReportId }) {
   return null;
 }
 
-function ReportsMap({
+const ReportsMap = memo(function ReportsMap({
   markers,
   selectedReportId,
   onSelectReport,
   getImageUrl,
+  hotspots = [],
 }) {
   const markerRefs = useRef({});
 
@@ -87,6 +89,26 @@ function ReportsMap({
           markers={markers}
           selectedReportId={selectedReportId}
         />
+
+        {hotspots.map((hotspot, index) => {
+          let color = '#facc15'; // yellow (low)
+          if (hotspot.severity === 'high') color = '#ef4444'; // red
+          else if (hotspot.severity === 'medium') color = '#f97316'; // orange
+
+          return (
+            <Circle
+              key={`hotspot-${index}`}
+              center={[hotspot.lat, hotspot.lng]}
+              radius={1100} // ~1.1km radius
+              pathOptions={{ fillColor: color, color: color, fillOpacity: 0.3, weight: 2 }}
+            >
+              <Popup>
+                <strong>🔥 High Risk Zone</strong><br/>
+                {hotspot.count} issues reported in this area.
+              </Popup>
+            </Circle>
+          );
+        })}
 
         {markers.map((marker) => {
           const imageUrl = getImageUrl(marker.report.image);
@@ -126,8 +148,8 @@ function ReportsMap({
                       <span>
                         {marker.lat.toFixed(4)}, {marker.lng.toFixed(4)}
                       </span>
-                      {marker.nearbyCount > 1 ? (
-                        <span>Hotspot x{marker.nearbyCount}</span>
+                      {marker.priority && marker.priority !== 'low' ? (
+                        <span style={{textTransform: 'capitalize'}}>Priority: {marker.priority}</span>
                       ) : null}
                     </div>
                   </div>
@@ -147,12 +169,10 @@ function ReportsMap({
 
       <div className="map-chip chip-left">Interactive map</div>
       <div className="map-chip chip-right">
-        {selectedMarker?.nearbyCount > 1
-          ? `Hotspot x${selectedMarker.nearbyCount}`
-          : "Select a report"}
+        {selectedMarker ? "Report selected" : "Select a report"}
       </div>
     </div>
   );
-}
+});
 
 export default ReportsMap;

@@ -43,6 +43,26 @@ exports.createReport = async (req, res, next) => {
       });
     }
 
+    // Determine priority based on nearby reports within 5km
+    const nearbyReportsCount = await Report.countDocuments({
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [finalLng, finalLat],
+          },
+          $maxDistance: 5000,
+        },
+      },
+    });
+
+    let priority = 'low';
+    if (nearbyReportsCount >= 5) {
+      priority = 'high';
+    } else if (nearbyReportsCount >= 2) {
+      priority = 'medium';
+    }
+
     const report = await Report.create({
       title: validatedData.title,
       description: validatedData.description,
@@ -51,6 +71,7 @@ exports.createReport = async (req, res, next) => {
         type: 'Point',
         coordinates: [finalLng, finalLat],
       },
+      priority,
     });
 
     res.status(201).json({
@@ -148,6 +169,59 @@ exports.resolveReport = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: report,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get report hotspots
+// @route   GET /api/reports/hotspots
+// @access  Public
+exports.getHotspots = async (req, res, next) => {
+  try {
+    const hotspots = await Report.aggregate([
+      {
+        $project: {
+          // Round coordinates to 2 decimal places (~1.1km precision)
+          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
+          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
+        },
+      },
+      {
+        $group: {
+          _id: { lng: '$roundedLng', lat: '$roundedLat' },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $match: {
+          // Only consider it a hotspot if there's more than 1 report
+          count: { $gt: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          lat: '$_id.lat',
+          lng: '$_id.lng',
+          count: 1,
+          severity: {
+            $switch: {
+              branches: [
+                { case: { $gte: ['$count', 5] }, then: 'high' },
+                { case: { $gte: ['$count', 2] }, then: 'medium' },
+              ],
+              default: 'low',
+            },
+          },
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: hotspots,
     });
   } catch (err) {
     next(err);

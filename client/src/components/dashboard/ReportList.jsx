@@ -1,12 +1,20 @@
+import React, { memo } from "react";
 import StatusBadge from "./StatusBadge";
 
-function ReportList({
+const getPriorityLabel = (priority) => {
+  if (priority === 'high') return '🔴 High Priority';
+  if (priority === 'medium') return '🟡 Medium Priority';
+  return '🟢 Low Priority';
+};
+
+const ReportList = memo(function ReportList({
   reports,
   loading,
   selectedReportId,
   markerLookup,
   actionLoading,
   assignmentOfficerId,
+  userRole,
   onSelectReport,
   onAssign,
   onResolve,
@@ -75,7 +83,14 @@ function ReportList({
 
               <div className="card-body">
                 <div className="card-topline">
-                  <StatusBadge status={report.status} />
+                  <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+                    <StatusBadge status={report.status} />
+                    {report.priority && report.priority !== 'low' && (
+                      <span className="priority-badge" style={{fontSize: '0.75rem', fontWeight: 600}}>
+                        {getPriorityLabel(report.priority)}
+                      </span>
+                    )}
+                  </div>
                   <span className="card-time">
                     {formatDateLabel(report.createdAt)}
                   </span>
@@ -87,46 +102,46 @@ function ReportList({
                 <div className="card-footer">
                   <span>{formatLocationLabel(report)}</span>
                   <span>
-                    {markerMeta?.nearbyCount > 1
-                      ? `Hotspot x${markerMeta.nearbyCount}`
-                      : "Zoom on map"}
+                    Zoom on map
                   </span>
                 </div>
               </div>
             </button>
 
-            <div className="card-actions">
-              <button
-                type="button"
-                className="card-action secondary"
-                onClick={() => onAssign(report._id)}
-                disabled={
-                  !assignmentOfficerId.trim() ||
-                  report.status === "resolved" ||
-                  isAssignLoading
-                }
-              >
-                {isAssignLoading
-                  ? "Assigning..."
-                  : report.status === "assigned"
-                    ? "Reassign"
-                    : "Assign"}
-              </button>
+            {(userRole === "officer" || userRole === "admin") && (
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="card-action secondary"
+                  onClick={() => onAssign(report._id)}
+                  disabled={
+                    !assignmentOfficerId.trim() ||
+                    report.status === "resolved" ||
+                    isAssignLoading
+                  }
+                >
+                  {isAssignLoading
+                    ? "Assigning..."
+                    : report.status === "assigned"
+                      ? "Reassign"
+                      : "Assign"}
+                </button>
 
-              <button
-                type="button"
-                className="card-action primary"
-                onClick={() => onResolve(report._id)}
-                disabled={report.status === "resolved" || isResolveLoading}
-              >
-                {isResolveLoading ? "Updating..." : "Mark Resolved"}
-              </button>
-            </div>
+                <button
+                  type="button"
+                  className="card-action primary"
+                  onClick={() => onResolve(report._id)}
+                  disabled={report.status === "resolved" || isResolveLoading}
+                >
+                  {isResolveLoading ? "Updating..." : "Mark Resolved"}
+                </button>
+              </div>
+            )}
           </article>
         );
       })}
     </div>
   );
-}
+});
 
 export default ReportList;

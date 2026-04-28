@@ -24,9 +24,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Route files
 const reportRoutes = require('./routes/reportRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 // Mount routers
 app.use('/api/reports', reportRoutes);
+app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
