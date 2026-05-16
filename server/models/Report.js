@@ -34,6 +34,11 @@ const reportSchema = new mongoose.Schema(
       enum: ['pending', 'assigned', 'resolved'],
       default: 'pending',
     },
+    priority: {
+      type: String,
+      enum: ['low', 'medium', 'high'],
+      default: 'low',
+    },
     assignedTo: {
       type: mongoose.Schema.ObjectId,
       ref: 'User',

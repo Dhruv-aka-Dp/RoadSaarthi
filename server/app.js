@@ -2,13 +2,15 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const { connectRedis } = require('./config/redis');
 const errorHandler = require('./middleware/errorHandler');
 
 // Load env vars
 dotenv.config();
 
-// Connect to database
+// Connect to databases
 connectDB();
+connectRedis();
 
 const app = express();
 
@@ -24,9 +26,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Route files
 const reportRoutes = require('./routes/reportRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 // Mount routers
 app.use('/api/reports', reportRoutes);
+app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

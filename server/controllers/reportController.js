@@ -1,6 +1,7 @@
 const Report = require('../models/Report');
 const { z } = require('zod');
 const { processImage } = require('../utils/imageProcessor');
+const { getRedisClient } = require('../config/redis');
 
 // Validation schema for creating a report
 const createReportSchema = z.object({
@@ -43,6 +44,26 @@ exports.createReport = async (req, res, next) => {
       });
     }
 
+    // Determine priority based on nearby reports within 5km
+    const nearbyReportsCount = await Report.countDocuments({
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [finalLng, finalLat],
+          },
+          $maxDistance: 5000,
+        },
+      },
+    });
+
+    let priority = 'low';
+    if (nearbyReportsCount >= 5) {
+      priority = 'high';
+    } else if (nearbyReportsCount >= 2) {
+      priority = 'medium';
+    }
+
     const report = await Report.create({
       title: validatedData.title,
       description: validatedData.description,
@@ -51,7 +72,14 @@ exports.createReport = async (req, res, next) => {
         type: 'Point',
         coordinates: [finalLng, finalLat],
       },
+      priority,
     });
+
+    // Invalidate the hotspots cache on new report
+    const redisClient = getRedisClient();
+    if (redisClient && redisClient.isReady) {
+      await redisClient.del('hotspots');
+    }
 
     res.status(201).json({
       success: true,
@@ -148,6 +176,79 @@ exports.resolveReport = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: report,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get report hotspots
+// @route   GET /api/reports/hotspots
+// @access  Public
+exports.getHotspots = async (req, res, next) => {
+  try {
+    const redisClient = getRedisClient();
+
+    // 1. Check cache first
+    if (redisClient && redisClient.isReady) {
+      const cachedHotspots = await redisClient.get('hotspots');
+      if (cachedHotspots) {
+        return res.status(200).json({
+          success: true,
+          data: JSON.parse(cachedHotspots),
+          source: 'cache'
+        });
+      }
+    }
+
+    const hotspots = await Report.aggregate([
+      {
+        $project: {
+          // Round coordinates to 2 decimal places (~1.1km precision)
+          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
+          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
+        },
+      },
+      {
+        $group: {
+          _id: { lng: '$roundedLng', lat: '$roundedLat' },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $match: {
+          // Only consider it a hotspot if there's more than 1 report
+          count: { $gt: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          lat: '$_id.lat',
+          lng: '$_id.lng',
+          count: 1,
+          severity: {
+            $switch: {
+              branches: [
+                { case: { $gte: ['$count', 5] }, then: 'high' },
+                { case: { $gte: ['$count', 2] }, then: 'medium' },
+              ],
+              default: 'low',
+            },
+          },
+        },
+      },
+    ]);
+
+    // 2. Save to cache with 10-minute TTL (600 seconds)
+    if (redisClient && redisClient.isReady) {
+      await redisClient.setEx('hotspots', 600, JSON.stringify(hotspots));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: hotspots,
+      source: 'database'
     });
   } catch (err) {
     next(err);
