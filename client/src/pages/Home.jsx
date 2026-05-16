@@ -12,7 +12,7 @@ import StatsBar from "../components/dashboard/StatsBar";
 import Toast from "../components/dashboard/Toast";
 import useMapMarkers from "../hooks/useMapMarkers";
 import API from "../services/api";
-import "./Home.css";
+import "./Dashboard.css";
 
 const STATUS_FILTERS = ["all", "pending", "assigned", "resolved"];
 const DEFAULT_MAP_WIDTH = 40;
@@ -139,10 +139,7 @@ function Home() {
     const [assignmentOfficerId, setAssignmentOfficerId] = useState(() => {
         return localStorage.getItem("roadsaarthi-officer-id") || "";
     });
-    // TODO: Replace this with actual Auth Context/State once login is implemented
-    const [userRole, setUserRole] = useState(() => {
-        return localStorage.getItem("roadsaarthi-user-role") || "user";
-    });
+    const [userRole, setUserRole] = useState("user");
     const deferredSearch = useDeferredValue(searchQuery);
     const layoutRef = useRef(null);
 
@@ -192,9 +189,6 @@ function Home() {
         localStorage.setItem("roadsaarthi-officer-id", assignmentOfficerId);
     }, [assignmentOfficerId]);
 
-    useEffect(() => {
-        localStorage.setItem("roadsaarthi-user-role", userRole);
-    }, [userRole]);
 
     useEffect(() => {
         if (!toast) {

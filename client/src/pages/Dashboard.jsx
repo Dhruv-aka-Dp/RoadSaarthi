@@ -12,6 +12,8 @@ import StatsBar from "../components/dashboard/StatsBar";
 import Toast from "../components/dashboard/Toast";
 import useMapMarkers from "../hooks/useMapMarkers";
 import API from "../services/api";
+import AdminDashboard from "../components/dashboard/AdminDashboard";
+import OfficerDashboard from "../components/dashboard/OfficerDashboard";
 import "./Dashboard.css";
 
 const STATUS_FILTERS = ["all", "pending", "assigned", "resolved"];
@@ -137,11 +139,19 @@ function Dashboard() {
   const [isResizing, setIsResizing] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
-  const [assignmentOfficerId, setAssignmentOfficerId] = useState(() => {
-    return localStorage.getItem("roadsaarthi-officer-id") || "";
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem("roadsaarthi-user");
+    return saved ? JSON.parse(saved) : { role: "user", name: "Guest User", officerId: "" };
   });
-  // TODO: Replace this with actual Auth Context/State once login is implemented
-  const [userRole, setUserRole] = useState("user");
+
+  const userRole = user.role;
+  const assignmentOfficerId = user.officerId || "";
+  const setAssignmentOfficerId = (val) => setUser(prev => ({ ...prev, officerId: val }));
+
+  useEffect(() => {
+    localStorage.setItem("roadsaarthi-user", JSON.stringify(user));
+  }, [user]);
+
   const deferredSearch = useDeferredValue(searchQuery);
   const layoutRef = useRef(null);
 
@@ -189,13 +199,8 @@ function Dashboard() {
     };
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem("roadsaarthi-officer-id", assignmentOfficerId);
-  }, [assignmentOfficerId]);
+  // Assignment ID sync removed as it is now part of user state
 
-  useEffect(() => {
-    localStorage.setItem("roadsaarthi-user-role", userRole);
-  }, [userRole]);
 
   useEffect(() => {
     if (!toast) {
@@ -354,8 +359,8 @@ function Dashboard() {
     });
   };
 
-  const handleAssign = async (reportId) => {
-    const officerId = assignmentOfficerId.trim();
+  const handleAssign = async (reportId, forcedOfficerId = null) => {
+    const officerId = forcedOfficerId || user.officerId;
 
     if (!officerId) {
       setToast({
@@ -463,6 +468,31 @@ function Dashboard() {
         </div>
 
         <div className="header-controls">
+          <div className="role-selector-shell" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', color: '#56736b' }}>Switch View (Simulate)</span>
+            <div className="role-pills" style={{ display: 'flex', gap: '5px' }}>
+              {['user', 'officer', 'admin'].map(role => (
+                <button
+                  key={role}
+                  onClick={() => setUser({ ...user, role, officerId: role === 'officer' ? "OFF-001" : "" })}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(17,61,53,0.1)',
+                    background: user.role === role ? '#0f6e56' : 'white',
+                    color: user.role === role ? 'white' : '#113d35',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {role.charAt(0).toUpperCase() + role.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="search-shell" htmlFor="report-search">
             <span>Search description</span>
             <input
@@ -493,147 +523,173 @@ function Dashboard() {
         </div>
       ) : null}
 
-      <section
-        ref={layoutRef}
-        className={`dashboard-main ${isResizing ? "is-resizing" : ""}`}
-        style={{ "--map-width": `${mapWidth}%` }}
-      >
-        <div className="map-panel">
-          <div className="panel-head">
-            <div>
-              <span className="panel-eyebrow">Map view</span>
-              <h2>Interactive map</h2>
+      {userRole === "admin" ? (
+        <AdminDashboard 
+          allReports={reports}
+          loading={loading}
+          hotspots={hotspots}
+          getImageUrl={getImageUrl}
+          formatLocationLabel={formatLocationLabel}
+        />
+      ) : userRole === "officer" ? (
+        <OfficerDashboard 
+          user={user}
+          allReports={reports}
+          loading={loading}
+          hotspots={hotspots}
+          getImageUrl={getImageUrl}
+          formatDateLabel={formatDateLabel}
+          formatLocationLabel={formatLocationLabel}
+          onActionComplete={(id, type) => {
+            if (type === 'resolve') handleResolve(id);
+            if (type === 'assign') {
+              handleAssign(id, user.officerId);
+            }
+          }}
+        />
+      ) : (
+        <section
+          ref={layoutRef}
+          className={`dashboard-main ${isResizing ? "is-resizing" : ""}`}
+          style={{ "--map-width": `${mapWidth}%` }}
+        >
+          <div className="map-panel">
+            <div className="panel-head">
+              <div>
+                <span className="panel-eyebrow">Map view</span>
+                <h2>Interactive map</h2>
+              </div>
+
+              <div className="panel-tools">
+                <span className="tool-pill active">40 / 60 default</span>
+                {isResetVisible ? (
+                  <button
+                    type="button"
+                    className="tool-button"
+                    onClick={() => setMapWidth(DEFAULT_MAP_WIDTH)}
+                  >
+                    Reset split
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="panel-tools">
-              <span className="tool-pill active">40 / 60 default</span>
-              {isResetVisible ? (
-                <button
-                  type="button"
-                  className="tool-button"
-                  onClick={() => setMapWidth(DEFAULT_MAP_WIDTH)}
-                >
-                  Reset split
-                </button>
+            <div className="map-surface">
+              <ReportsMap
+                markers={markers}
+                hotspots={hotspots}
+                selectedReportId={activeSelectedReportId}
+                onSelectReport={setSelectedReportId}
+                getImageUrl={getImageUrl}
+              />
+
+              {loading ? (
+                <div className="map-loading-overlay">
+                  <span className="loader-ring" />
+                  <p>Loading map data...</p>
+                </div>
               ) : null}
             </div>
           </div>
 
-          <div className="map-surface">
-            <ReportsMap
-              markers={markers}
-              hotspots={hotspots}
-              selectedReportId={activeSelectedReportId}
-              onSelectReport={setSelectedReportId}
-              getImageUrl={getImageUrl}
-            />
+          <button
+            type="button"
+            className="resize-rail"
+            onMouseDown={() => setIsResizing(true)}
+            aria-label="Resize map and report list panels"
+          >
+            <span />
+            <span />
+            <span />
+          </button>
 
-            {loading ? (
-              <div className="map-loading-overlay">
-                <span className="loader-ring" />
-                <p>Loading map data...</p>
+          <aside className="list-panel">
+            <div className="panel-head list-head">
+              <div>
+                <span className="panel-eyebrow">Report queue</span>
+                <h2>Road Reports</h2>
               </div>
-            ) : null}
-          </div>
-        </div>
 
-        <button
-          type="button"
-          className="resize-rail"
-          onMouseDown={() => setIsResizing(true)}
-          aria-label="Resize map and report list panels"
-        >
-          <span />
-          <span />
-          <span />
-        </button>
-
-        <aside className="list-panel">
-          <div className="panel-head list-head">
-            <div>
-              <span className="panel-eyebrow">Report queue</span>
-              <h2>Road Reports</h2>
-            </div>
-
-            <div className="list-actions">
-              <label className="sort-shell" htmlFor="sort-reports">
-                <span>Sort</span>
-                <select
-                  id="sort-reports"
-                  value={sortBy}
-                  onChange={(event) => setSortBy(event.target.value)}
-                >
-                  <option value="newest">Newest first</option>
-                  <option value="oldest">Oldest first</option>
-                  <option value="status">By status</option>
-                </select>
-              </label>
-
-              {(userRole === "officer" || userRole === "admin") && (
-                <label className="officer-shell" htmlFor="assign-officer-id">
-                  <span>Officer ID</span>
-                  <input
-                    id="assign-officer-id"
-                    type="text"
-                    value={assignmentOfficerId}
-                    onChange={(event) => setAssignmentOfficerId(event.target.value)}
-                    placeholder="Required for assign"
-                  />
+              <div className="list-actions">
+                <label className="sort-shell" htmlFor="sort-reports">
+                  <span>Sort</span>
+                  <select
+                    id="sort-reports"
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value)}
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="status">By status</option>
+                  </select>
                 </label>
-              )}
+
+                {(userRole === "officer" || userRole === "admin") && (
+                  <label className="officer-shell" htmlFor="assign-officer-id">
+                    <span>Officer ID</span>
+                    <input
+                      id="assign-officer-id"
+                      type="text"
+                      value={assignmentOfficerId}
+                      onChange={(event) => setAssignmentOfficerId(event.target.value)}
+                      placeholder="Required for assign"
+                    />
+                  </label>
+                )}
+              </div>
             </div>
-          </div>
 
-          {(userRole === "officer" || userRole === "admin") && (
-            <p className="assignment-hint">
-              Assign actions use the officer ID entered above.
-            </p>
-          )}
+            {(userRole === "officer" || userRole === "admin") && (
+              <p className="assignment-hint">
+                Assign actions use the officer ID entered above.
+              </p>
+            )}
 
-          <div className="filter-row" role="tablist" aria-label="Status filters">
-            {STATUS_FILTERS.map((filterValue) => (
-              <button
-                key={filterValue}
-                type="button"
-                className={`filter-chip ${
-                  statusFilter === filterValue ? "active" : ""
-                }`}
-                onClick={() => setStatusFilter(filterValue)}
-              >
-                {filterValue === "all"
-                  ? "All"
-                  : filterValue.charAt(0).toUpperCase() + filterValue.slice(1)}
-              </button>
-            ))}
-          </div>
+            <div className="filter-row" role="tablist" aria-label="Status filters">
+              {STATUS_FILTERS.map((filterValue) => (
+                <button
+                  key={filterValue}
+                  type="button"
+                  className={`filter-chip ${
+                    statusFilter === filterValue ? "active" : ""
+                  }`}
+                  onClick={() => setStatusFilter(filterValue)}
+                >
+                  {filterValue === "all"
+                    ? "All"
+                    : filterValue.charAt(0).toUpperCase() + filterValue.slice(1)}
+                </button>
+              ))}
+            </div>
 
-          <div className="results-meta">
-            <p>
-              Showing <strong>{filteredReports.length}</strong> of{" "}
-              <strong>{reports.length}</strong> reports
-            </p>
-            <span className="results-hint">
-              Click any card to zoom and open its map popup.
-            </span>
-          </div>
+            <div className="results-meta">
+              <p>
+                Showing <strong>{filteredReports.length}</strong> of{" "}
+                <strong>{reports.length}</strong> reports
+              </p>
+              <span className="results-hint">
+                Click any card to zoom and open its map popup.
+              </span>
+            </div>
 
-          <ReportList
-            reports={filteredReports}
-            loading={loading}
-            selectedReportId={activeSelectedReportId}
-            markerLookup={markerLookup}
-            actionLoading={actionLoading}
-            assignmentOfficerId={assignmentOfficerId}
-            userRole={userRole}
-            onSelectReport={setSelectedReportId}
-            onAssign={handleAssign}
-            onResolve={handleResolve}
-            getImageUrl={getImageUrl}
-            formatDateLabel={formatDateLabel}
-            formatLocationLabel={formatLocationLabel}
-          />
-        </aside>
-      </section>
+            <ReportList
+              reports={filteredReports}
+              loading={loading}
+              selectedReportId={activeSelectedReportId}
+              markerLookup={markerLookup}
+              actionLoading={actionLoading}
+              assignmentOfficerId={assignmentOfficerId}
+              userRole={userRole}
+              onSelectReport={setSelectedReportId}
+              onAssign={handleAssign}
+              onResolve={handleResolve}
+              getImageUrl={getImageUrl}
+              formatDateLabel={formatDateLabel}
+              formatLocationLabel={formatLocationLabel}
+            />
+          </aside>
+        </section>
+      )}
 
       {isReportModalOpen ? (
         <div

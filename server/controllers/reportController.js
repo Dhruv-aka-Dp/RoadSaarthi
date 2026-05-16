@@ -1,6 +1,7 @@
 const Report = require('../models/Report');
 const { z } = require('zod');
 const { processImage } = require('../utils/imageProcessor');
+const sendEmail = require('../utils/sendEmail');
 
 // Validation schema for creating a report
 const createReportSchema = z.object({
@@ -73,6 +74,18 @@ exports.createReport = async (req, res, next) => {
       },
       priority,
     });
+
+    // Send email notification for new report
+    try {
+      await sendEmail({
+        to: process.env.CONTACT_EMAIL || 'admin@roadsaarthi.com',
+        subject: `New Road Report: ${report.title}`,
+        text: `A new road report has been submitted.\n\nTitle: ${report.title}\nDescription: ${report.description}\nPriority: ${priority}\nLocation: ${finalLat}, ${finalLng}`,
+      });
+    } catch (emailErr) {
+      console.error('Email notification failed:', emailErr.message);
+      // Don't fail the whole request if email fails
+    }
 
     res.status(201).json({
       success: true,
@@ -222,6 +235,132 @@ exports.getHotspots = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: hotspots,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get dashboard summary statistics
+// @route   GET /api/reports/stats
+// @access  Public
+exports.getDashboardStats = async (req, res, next) => {
+  try {
+    const totalReports = await Report.countDocuments();
+    const pendingReports = await Report.countDocuments({ status: 'pending' });
+    const assignedReports = await Report.countDocuments({ status: 'assigned' });
+    const resolvedReports = await Report.countDocuments({ status: 'resolved' });
+    
+    // Calculate hotspots count (re-using the logic from getHotspots)
+    const hotspotData = await Report.aggregate([
+      {
+        $project: {
+          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
+          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
+        },
+      },
+      {
+        $group: {
+          _id: { lng: '$roundedLng', lat: '$roundedLat' },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        total: totalReports,
+        pending: pendingReports,
+        assigned: assignedReports,
+        resolved: resolvedReports,
+        hotspots: hotspotData.length,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get stats for a specific officer
+// @route   GET /api/reports/officer-stats/:officerId
+// @access  Private (Officer/Admin)
+exports.getOfficerStats = async (req, res, next) => {
+  try {
+    const { officerId } = req.params;
+
+    const assigned = await Report.countDocuments({ assignedTo: officerId });
+    const pending = await Report.countDocuments({ assignedTo: officerId, status: 'assigned' }); // Pending for this officer
+    const resolved = await Report.countDocuments({ assignedTo: officerId, status: 'resolved' });
+    
+    // Resolved today
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const resolvedToday = await Report.countDocuments({ 
+      assignedTo: officerId, 
+      status: 'resolved',
+      updatedAt: { $gte: startOfToday }
+    });
+
+    const resolutionRate = assigned > 0 ? (resolved / assigned) * 100 : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalAssigned: assigned,
+        pendingForOfficer: pending,
+        resolved: resolved,
+        resolvedToday: resolvedToday,
+        resolutionPercentage: resolutionRate.toFixed(1),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get performance metrics for all officers
+// @route   GET /api/reports/admin/officer-metrics
+// @access  Private (Admin)
+exports.getAdminOfficerMetrics = async (req, res, next) => {
+  try {
+    const metrics = await Report.aggregate([
+      {
+        $match: { assignedTo: { $ne: null } }
+      },
+      {
+        $group: {
+          _id: '$assignedTo',
+          totalAssigned: { $sum: 1 },
+          resolved: {
+            $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] }
+          },
+          pending: {
+            $sum: { $cond: [{ $eq: ['$status', 'assigned'] }, 1, 0] }
+          }
+        }
+      },
+      {
+        $project: {
+          officerId: '$_id',
+          totalAssigned: 1,
+          resolved: 1,
+          pending: 1,
+          resolutionRate: {
+            $multiply: [{ $divide: ['$resolved', '$totalAssigned'] }, 100]
+          }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: metrics,
     });
   } catch (err) {
     next(err);
