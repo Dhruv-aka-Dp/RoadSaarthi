@@ -1,6 +1,7 @@
 const Report = require('../models/Report');
 const { z } = require('zod');
 const { processImage } = require('../utils/imageProcessor');
+const { getRedisClient } = require('../config/redis');
 
 // Validation schema for creating a report
 const createReportSchema = z.object({
@@ -73,6 +74,12 @@ exports.createReport = async (req, res, next) => {
       },
       priority,
     });
+
+    // Invalidate the hotspots cache on new report
+    const redisClient = getRedisClient();
+    if (redisClient && redisClient.isReady) {
+      await redisClient.del('hotspots');
+    }
 
     res.status(201).json({
       success: true,
@@ -180,6 +187,20 @@ exports.resolveReport = async (req, res, next) => {
 // @access  Public
 exports.getHotspots = async (req, res, next) => {
   try {
+    const redisClient = getRedisClient();
+
+    // 1. Check cache first
+    if (redisClient && redisClient.isReady) {
+      const cachedHotspots = await redisClient.get('hotspots');
+      if (cachedHotspots) {
+        return res.status(200).json({
+          success: true,
+          data: JSON.parse(cachedHotspots),
+          source: 'cache'
+        });
+      }
+    }
+
     const hotspots = await Report.aggregate([
       {
         $project: {
@@ -219,9 +240,15 @@ exports.getHotspots = async (req, res, next) => {
       },
     ]);
 
+    // 2. Save to cache with 10-minute TTL (600 seconds)
+    if (redisClient && redisClient.isReady) {
+      await redisClient.setEx('hotspots', 600, JSON.stringify(hotspots));
+    }
+
     res.status(200).json({
       success: true,
       data: hotspots,
+      source: 'database'
     });
   } catch (err) {
     next(err);
