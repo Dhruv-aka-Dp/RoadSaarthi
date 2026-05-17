@@ -134,3 +134,15 @@ exports.getMe = async (req, res, next) => {
     next(err);
   }
 };
+
+// @desc    Get all users (for admin dashboard)
+// @route   GET /api/auth/users
+// @access  Private
+exports.getUsers = async (req, res, next) => {
+  try {
+    const users = await User.find({}).select('-password');
+    res.status(200).json({ success: true, data: users });
+  } catch (err) {
+    next(err);
+  }
+};

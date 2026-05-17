@@ -11,6 +11,7 @@ const {
 } = require('../controllers/reportController');
 
 const upload = require('../middleware/upload');
+const { protect } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -27,8 +28,8 @@ router.route('/admin/officer-metrics')
   .get(getAdminOfficerMetrics);
 
 router.route('/')
-  .get(getReports)
-  .post(upload.single('image'), createReport);
+  .get(protect, getReports)
+  .post(protect, upload.single('image'), createReport);
 
 router.route('/:id/assign')
   .patch(assignReport);

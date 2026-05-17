@@ -40,8 +40,7 @@ const reportSchema = new mongoose.Schema(
       default: 'low',
     },
     assignedTo: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User',
+      type: String,
       default: null,
     },
     createdBy: {

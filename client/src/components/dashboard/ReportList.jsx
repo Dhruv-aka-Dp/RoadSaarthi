@@ -55,7 +55,7 @@ const ReportList = memo(function ReportList({
       {reports.map((report) => {
         const imageUrl = getImageUrl(report.image);
         const isSelected = report._id === selectedReportId;
-        const markerMeta = markerLookup.get(report._id);
+        const markerMeta = markerLookup?.get(report._id);
         const isAssignLoading =
           actionLoading?.type === "assign" && actionLoading.id === report._id;
         const isResolveLoading =
@@ -110,22 +110,24 @@ const ReportList = memo(function ReportList({
 
             {(userRole === "officer" || userRole === "admin") && (
               <div className="card-actions">
-                <button
-                  type="button"
-                  className="card-action secondary"
-                  onClick={() => onAssign(report._id)}
-                  disabled={
-                    !assignmentOfficerId.trim() ||
-                    report.status === "resolved" ||
-                    isAssignLoading
-                  }
-                >
-                  {isAssignLoading
-                    ? "Assigning..."
-                    : report.status === "assigned"
-                      ? "Reassign"
-                      : "Assign"}
-                </button>
+                {userRole === "admin" && (
+                  <button
+                    type="button"
+                    className="card-action secondary"
+                    onClick={() => onAssign(report._id)}
+                    disabled={
+                      !assignmentOfficerId?.trim() ||
+                      report.status === "resolved" ||
+                      isAssignLoading
+                    }
+                  >
+                    {isAssignLoading
+                      ? "Assigning..."
+                      : report.status === "assigned"
+                        ? "Reassign"
+                        : "Assign"}
+                  </button>
+                )}
 
                 <button
                   type="button"

@@ -54,14 +54,22 @@ function OfficerDashboard({
     { label: "Success Rate", value: `${stats.resolutionPercentage}%`, tone: "neutral" },
   ];
 
-  const markers = assignedReports.map(report => ({
-    id: report._id,
-    lat: report.location.coordinates[1],
-    lng: report.location.coordinates[0],
-    status: report.status,
-    priority: report.priority,
-    report: report
-  }));
+  const markers = useMemo(() => {
+    return assignedReports
+      .filter(r => r.location && Array.isArray(r.location.coordinates) && r.location.coordinates.length >= 2)
+      .map(report => ({
+        id: report._id,
+        lat: report.location.coordinates[1],
+        lng: report.location.coordinates[0],
+        status: report.status,
+        priority: report.priority,
+        report: report
+      }));
+  }, [assignedReports]);
+
+  const markerLookup = useMemo(() => {
+    return new Map(markers.map((marker) => [marker.id, marker]));
+  }, [markers]);
 
   return (
     <div className="officer-dashboard">
@@ -116,6 +124,7 @@ function OfficerDashboard({
               reports={assignedReports}
               loading={loading}
               userRole="officer"
+              markerLookup={markerLookup}
               onResolve={(id) => onActionComplete(id, 'resolve')}
               onAssign={(id) => onActionComplete(id, 'assign')}
               getImageUrl={getImageUrl}

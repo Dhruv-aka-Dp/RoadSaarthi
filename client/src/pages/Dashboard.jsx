@@ -4,7 +4,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useContext,
 } from "react";
+import { useNavigate } from "react-router-dom";
+import { AuthContext } from "../context/AuthContext";
 import ReportForm from "../components/ReportForm";
 import ReportList from "../components/dashboard/ReportList";
 import ReportsMap from "../components/dashboard/ReportsMap";
@@ -139,18 +142,18 @@ function Dashboard() {
   const [isResizing, setIsResizing] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem("roadsaarthi-user");
-    return saved ? JSON.parse(saved) : { role: "user", name: "Guest User", officerId: "" };
-  });
-
-  const userRole = user.role;
-  const assignmentOfficerId = user.officerId || "";
-  const setAssignmentOfficerId = (val) => setUser(prev => ({ ...prev, officerId: val }));
+  const { user: authUser, loading: authLoading } = useContext(AuthContext);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    localStorage.setItem("roadsaarthi-user", JSON.stringify(user));
-  }, [user]);
+    if (!authLoading && !authUser) {
+      navigate("/login");
+    }
+  }, [authUser, authLoading, navigate]);
+
+  const user = authUser || { role: "user", name: "Guest User", officerId: "" };
+  const userRole = user.role;
+  const assignmentOfficerId = user.officerId || "";
 
   const deferredSearch = useDeferredValue(searchQuery);
   const layoutRef = useRef(null);
@@ -451,6 +454,15 @@ function Dashboard() {
     }
   };
 
+  if (authLoading) {
+    return (
+      <div className="dashboard-page" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#113d35' }}>
+        <span className="loader" style={{ width: '40px', height: '40px', borderSize: '4px' }}></span>
+        <p style={{ marginLeft: '16px', fontWeight: 'bold' }}>Verifying authorization...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="dashboard-page">
       <div className="dashboard-backdrop" />
@@ -468,30 +480,6 @@ function Dashboard() {
         </div>
 
         <div className="header-controls">
-          <div className="role-selector-shell" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', color: '#56736b' }}>Switch View (Simulate)</span>
-            <div className="role-pills" style={{ display: 'flex', gap: '5px' }}>
-              {['user', 'officer', 'admin'].map(role => (
-                <button
-                  key={role}
-                  onClick={() => setUser({ ...user, role, officerId: role === 'officer' ? "OFF-001" : "" })}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(17,61,53,0.1)',
-                    background: user.role === role ? '#0f6e56' : 'white',
-                    color: user.role === role ? 'white' : '#113d35',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {role.charAt(0).toUpperCase() + role.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
 
           <label className="search-shell" htmlFor="report-search">
             <span>Search description</span>
@@ -504,13 +492,15 @@ function Dashboard() {
             />
           </label>
 
-          <button
-            type="button"
-            className="report-link report-trigger"
-            onClick={() => setIsReportModalOpen(true)}
-          >
-            Report Issue
-          </button>
+          {userRole === "user" && (
+            <button
+              type="button"
+              className="report-link report-trigger"
+              onClick={() => setIsReportModalOpen(true)}
+            >
+              Report Issue
+            </button>
+          )}
         </div>
       </header>
 
@@ -530,6 +520,8 @@ function Dashboard() {
           hotspots={hotspots}
           getImageUrl={getImageUrl}
           formatLocationLabel={formatLocationLabel}
+          onAssign={handleAssign}
+          onResolve={handleResolve}
         />
       ) : userRole === "officer" ? (
         <OfficerDashboard 

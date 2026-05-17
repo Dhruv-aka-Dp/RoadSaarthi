@@ -8,18 +8,32 @@ function AdminDashboard({
   loading, 
   hotspots, 
   getImageUrl, 
-  formatLocationLabel 
+  formatLocationLabel,
+  onAssign,
+  onResolve
 }) {
   const [officerMetrics, setOfficerMetrics] = useState([]);
-  const [users, setUsers] = useState([
-    { id: 1, name: "Arjun Mehta", email: "arjun@roadsarthi.com", role: "officer", status: "active" },
-    { id: 2, name: "Priya Sharma", email: "priya@roadsarthi.com", role: "officer", status: "active" },
-    { id: 3, name: "Rohan Das", email: "rohan@gmail.com", role: "user", status: "active" },
-    { id: 4, name: "Neha Patil", email: "neha@gmail.com", role: "user", status: "inactive" },
-  ]);
+  const [users, setUsers] = useState([]);
+  const [userLoading, setUserLoading] = useState(true);
 
   const [showOfficerModal, setShowOfficerModal] = useState(false);
   const [newOfficer, setNewOfficer] = useState({ name: "", email: "" });
+
+  const fetchUsers = async () => {
+    try {
+      setUserLoading(true);
+      const res = await API.get("/auth/users");
+      setUsers(res.data.data || []);
+    } catch (err) {
+      console.error("Failed to fetch users:", err);
+    } finally {
+      setUserLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUsers();
+  }, []);
 
   useEffect(() => {
     const fetchMetrics = async () => {
@@ -32,6 +46,15 @@ function AdminDashboard({
     };
     fetchMetrics();
   }, [allReports]);
+
+  const officers = useMemo(() => {
+    return users.filter(u => u.role === "officer");
+  }, [users]);
+
+  const getOfficerName = (offId) => {
+    const found = officers.find(o => o.officerId === offId);
+    return found ? found.name : offId;
+  };
 
   // Overall system stats
   const systemStats = useMemo(() => {
@@ -56,31 +79,172 @@ function AdminDashboard({
     report: report
   }));
 
-  const handleCreateOfficer = (e) => {
+  const handleCreateOfficer = async (e) => {
     e.preventDefault();
     if (!newOfficer.name || !newOfficer.email) return;
 
-    // Simulate saving a new officer
-    const officer = {
-      id: users.length + 1,
-      name: newOfficer.name,
-      email: newOfficer.email,
-      role: "officer",
-      status: "active"
-    };
+    try {
+      const generatedOfficerId = `OFF-${Math.floor(1000 + Math.random() * 9000)}`;
+      
+      // Register new officer in the live database
+      await API.post("/auth/register", {
+        name: newOfficer.name,
+        email: newOfficer.email,
+        password: "Password123", // default secure password
+        role: "officer",
+        officerId: generatedOfficerId
+      });
 
-    setUsers([...users, officer]);
-    setNewOfficer({ name: "", email: "" });
-    setShowOfficerModal(false);
+      // Reload live users list
+      fetchUsers();
+      setNewOfficer({ name: "", email: "" });
+      setShowOfficerModal(false);
+    } catch (err) {
+      console.error("Failed to register officer:", err);
+      alert(err.response?.data?.error || "Failed to register officer in the database.");
+    }
   };
 
   const handleToggleUserStatus = (id) => {
-    setUsers(users.map(u => u.id === id ? { ...u, status: u.status === "active" ? "inactive" : "active" } : u));
+    setUsers(users.map(u => u._id === id ? { ...u, isInactive: !u.isInactive } : u));
   };
 
   return (
     <div className="admin-dashboard">
       <StatsBar stats={systemStats} />
+
+      {/* Manage & Assign Reports section - Full-width, placed above Hotspot Monitoring map */}
+      <div className="users-section" style={{ marginBottom: '30px', marginTop: '20px' }}>
+        <div className="section-header directory-header">
+          <div>
+            <span className="panel-eyebrow">Report Management</span>
+            <h3>Manage & Assign Reports</h3>
+          </div>
+        </div>
+
+        <div className="directory-table-wrapper">
+          <table className="directory-table">
+            <thead>
+              <tr>
+                <th>Report Info</th>
+                <th>Location</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Assigned To</th>
+                <th>Action / Assignment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allReports.length === 0 ? (
+                <tr>
+                  <td colSpan="6" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                    No reports available in the database.
+                  </td>
+                </tr>
+              ) : (
+                allReports.map((report) => (
+                  <tr key={report._id}>
+                    <td className="user-name">
+                      <strong style={{ display: 'block', fontSize: '14px', color: '#113d35' }}>{report.title}</strong>
+                      <span style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>{report.description}</span>
+                    </td>
+                    <td style={{ fontSize: '12px', color: '#555' }}>
+                      {formatLocationLabel(report)}
+                    </td>
+                    <td>
+                      <span className="priority-badge" style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        background: report.priority === 'high' ? '#ffebeb' : report.priority === 'medium' ? '#fff6e6' : '#effaf6',
+                        color: report.priority === 'high' ? '#d93838' : report.priority === 'medium' ? '#e67e22' : '#2ecc71'
+                      }}>
+                        {(report.priority || 'low').toUpperCase()}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`status-indicator status-${report.status}`} style={{ textTransform: 'capitalize' }}>
+                        {report.status}
+                      </span>
+                    </td>
+                    <td style={{ fontWeight: '600', color: report.assignedTo ? '#0f6e56' : '#888', fontSize: '13px' }}>
+                      {report.assignedTo ? (
+                        <span>👤 {getOfficerName(report.assignedTo)} ({report.assignedTo})</span>
+                      ) : report.status === 'resolved' ? (
+                        <span style={{ color: '#2ecc71', fontWeight: 'bold' }}>✔️ N/A (Closed)</span>
+                      ) : (
+                        '⚠️ Unassigned'
+                      )}
+                    </td>
+                    <td>
+                      {report.status === 'resolved' ? (
+                        <span style={{
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 'bold',
+                          background: '#effaf6',
+                          color: '#2ecc71',
+                          display: 'inline-block'
+                        }}>
+                          ✔️ Case Resolved
+                        </span>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <select
+                            id={`assign-select-${report._id}`}
+                            defaultValue={report.assignedTo || ""}
+                            style={{
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(17,61,53,0.15)',
+                              background: '#fff',
+                              fontSize: '12px',
+                              color: '#113d35',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <option value="">-- Choose Officer --</option>
+                            {officers.map(off => (
+                              <option key={off._id} value={off.officerId}>
+                                {off.name} ({off.officerId})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => {
+                              const selectEl = document.getElementById(`assign-select-${report._id}`);
+                              const selectedOffId = selectEl ? selectEl.value : "";
+                              if (selectedOffId) {
+                                onAssign(report._id, selectedOffId);
+                              }
+                            }}
+                            className="btn-action-toggle"
+                            style={{
+                              padding: '6px 12px',
+                              background: '#0f6e56',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 'bold',
+                              cursor: 'pointer',
+                              transition: 'background 0.2s'
+                            }}
+                          >
+                            Assign
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="admin-grid">
         <div className="admin-main">
@@ -97,60 +261,6 @@ function AdminDashboard({
             />
           </div>
 
-          <div className="users-section">
-            <div className="section-header directory-header">
-              <div>
-                <span className="panel-eyebrow">User Directory</span>
-                <h3>System Accounts</h3>
-              </div>
-              <button 
-                onClick={() => setShowOfficerModal(true)}
-                className="btn-register"
-              >
-                + Register Officer
-              </button>
-            </div>
-
-            <div className="directory-table-wrapper">
-              <table className="directory-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Role</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map(u => (
-                    <tr key={u.id}>
-                      <td className="user-name">{u.name}</td>
-                      <td>{u.email}</td>
-                      <td>
-                        <span className={`role-badge role-${u.role}`}>
-                          {u.role}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`status-indicator status-${u.status}`}>
-                          {u.status === 'active' ? '● Active' : '● Inactive'}
-                        </span>
-                      </td>
-                      <td>
-                        <button 
-                          onClick={() => handleToggleUserStatus(u.id)}
-                          className="btn-action-toggle"
-                        >
-                          {u.status === 'active' ? 'Deactivate' : 'Activate'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
 
         <div className="admin-side">
@@ -164,7 +274,7 @@ function AdminDashboard({
               officerMetrics.map(metric => (
                 <div key={metric.officerId} className="officer-metric-card">
                   <div className="metric-header">
-                    <strong>Officer: {metric.officerId}</strong>
+                    <strong>Officer: {getOfficerName(metric.officerId)}</strong>
                     <span className="metric-rate">{metric.resolutionRate.toFixed(0)}% Resolved</span>
                   </div>
                   <div className="metric-stats">
@@ -201,6 +311,76 @@ function AdminDashboard({
               ))}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* User Directory section - Full width at the bottom */}
+      <div className="users-section" style={{ marginTop: '30px' }}>
+        <div className="section-header directory-header">
+          <div>
+            <span className="panel-eyebrow">User Directory</span>
+            <h3>System Accounts</h3>
+          </div>
+          <button 
+            onClick={() => setShowOfficerModal(true)}
+            className="btn-register"
+          >
+            + Register Officer
+          </button>
+        </div>
+
+        <div className="directory-table-wrapper">
+          <table className="directory-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {userLoading ? (
+                <tr>
+                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                    Loading system accounts...
+                  </td>
+                </tr>
+              ) : users.length === 0 ? (
+                <tr>
+                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                    No system accounts found.
+                  </td>
+                </tr>
+              ) : (
+                users.map(u => (
+                  <tr key={u._id}>
+                    <td className="user-name">{u.name}</td>
+                    <td>{u.email}</td>
+                    <td>
+                      <span className={`role-badge role-${u.role}`}>
+                        {u.role}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`status-indicator status-${u.isInactive ? 'inactive' : 'active'}`}>
+                        {u.isInactive ? '● Inactive' : '● Active'}
+                      </span>
+                    </td>
+                    <td>
+                      <button 
+                        onClick={() => handleToggleUserStatus(u._id)}
+                        className="btn-action-toggle"
+                      >
+                        {u.isInactive ? 'Activate' : 'Deactivate'}
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

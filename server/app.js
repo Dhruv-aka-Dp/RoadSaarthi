@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
@@ -19,6 +20,9 @@ app.use(express.json());
 
 // Enable CORS
 app.use(cors());
+
+// Serve static uploads folder
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 
 // Route files

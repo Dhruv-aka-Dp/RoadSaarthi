@@ -75,6 +75,7 @@ exports.createReport = async (req, res, next) => {
         coordinates: [finalLng, finalLat],
       },
       priority,
+      createdBy: req.user ? req.user._id : null,
     });
 
     // Send email notification for new report
@@ -112,6 +113,13 @@ exports.getReports = async (req, res, next) => {
     const { lng, lat, distance } = req.query;
 
     let query = {};
+
+    // Filter by role: citizen only sees their own, officer sees assigned, admin sees all
+    if (req.user && req.user.role === 'user') {
+      query.createdBy = req.user._id;
+    } else if (req.user && req.user.role === 'officer') {
+      query.assignedTo = req.user.officerId;
+    }
 
     // If spatial parameters are provided, do a geo query
     if (lng && lat && distance) {
