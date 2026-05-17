@@ -15,6 +15,7 @@ const registerSchema = z.object({
   email: z.string().email('Please add a valid email'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
   role: z.enum(['user', 'officer', 'admin']).optional(),
+  officerId: z.string().optional(),
 });
 
 // @desc    Register user
@@ -23,7 +24,7 @@ const registerSchema = z.object({
 exports.register = async (req, res, next) => {
   try {
     const validatedData = registerSchema.parse(req.body);
-    const { name, email, password, role } = validatedData;
+    const { name, email, password, role, officerId } = validatedData;
 
     // Check if user exists
     const userExists = await User.findOne({ email });
@@ -42,6 +43,7 @@ exports.register = async (req, res, next) => {
       email,
       password: hashedPassword,
       role: role || 'user',
+      officerId: role === 'officer' ? officerId : null,
     });
 
     if (user) {
@@ -52,6 +54,7 @@ exports.register = async (req, res, next) => {
           name: user.name,
           email: user.email,
           role: user.role,
+          officerId: user.officerId,
         },
         token: generateToken(user._id),
       });
@@ -97,6 +100,7 @@ exports.login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        officerId: user.officerId,
       },
       token: generateToken(user._id),
     });
@@ -113,7 +117,7 @@ exports.getMe = async (req, res, next) => {
     const user = await User.findById(req.user.id);
 
     if (!user) {
-        return res.status(404).json({ success: false, error: 'User not found' });
+      return res.status(404).json({ success: false, error: 'User not found' });
     }
 
     res.status(200).json({
@@ -123,6 +127,7 @@ exports.getMe = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        officerId: user.officerId,
       },
     });
   } catch (err) {

@@ -26,6 +26,10 @@ const userSchema = new mongoose.Schema(
       enum: ['user', 'officer', 'admin'],
       default: 'user',
     },
+    officerId: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
