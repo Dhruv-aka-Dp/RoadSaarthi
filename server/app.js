@@ -23,11 +23,11 @@ app.use(cors());
 
 // Route files
 const reportRoutes = require('./routes/reportRoutes');
-const authRoutes = require('./routes/authRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 
 // Mount routers
 app.use('/api/reports', reportRoutes);
-app.use('/api/auth', authRoutes);
+app.use('/api/contact', contactRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

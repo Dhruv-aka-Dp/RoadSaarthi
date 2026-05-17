@@ -5,6 +5,9 @@ const {
   assignReport,
   resolveReport,
   getHotspots,
+  getDashboardStats,
+  getOfficerStats,
+  getAdminOfficerMetrics,
 } = require('../controllers/reportController');
 
 const upload = require('../middleware/upload');
@@ -13,6 +16,15 @@ const router = express.Router();
 
 router.route('/hotspots')
   .get(getHotspots);
+
+router.route('/stats')
+  .get(getDashboardStats);
+
+router.route('/officer-stats/:officerId')
+  .get(getOfficerStats);
+
+router.route('/admin/officer-metrics')
+  .get(getAdminOfficerMetrics);
 
 router.route('/')
   .get(getReports)
