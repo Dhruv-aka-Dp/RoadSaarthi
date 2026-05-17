@@ -1,22 +1,28 @@
-import { useState, useContext } from 'react';
+import { useState, useContext, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { AuthContext } from '../../context/AuthContext';
 import './AuthModal.css';
 
 const AuthModal = () => {
-  const [isLogin, setIsLogin] = useState(true);
+  const location = useLocation();
+  const [isLogin, setIsLogin] = useState(location.pathname !== '/signup');
+
+  useEffect(() => {
+    setIsLogin(location.pathname !== '/signup');
+  }, [location.pathname]);
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     password: '',
     role: 'user',
+    officerId: '',
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const { login, register } = useContext(AuthContext);
   const navigate = useNavigate();
-  const location = useLocation();
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -31,9 +37,9 @@ const AuthModal = () => {
       if (isLogin) {
         await login(formData.email, formData.password);
       } else {
-        await register(formData.name, formData.email, formData.password, formData.role);
+        await register(formData.name, formData.email, formData.password, formData.role, formData.officerId);
       }
-      
+
       // Navigate to dashboard after successful auth
       navigate('/dashboard');
     } catch (err) {
@@ -133,7 +139,32 @@ const AuthModal = () => {
                   />
                   <span>Officer</span>
                 </label>
+                <label className={`role-option ${formData.role === 'admin' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="role"
+                    value="admin"
+                    checked={formData.role === 'admin'}
+                    onChange={handleChange}
+                  />
+                  <span>Admin</span>
+                </label>
               </div>
+            </div>
+          )}
+
+          {!isLogin && formData.role === 'officer' && (
+            <div className="form-group">
+              <label htmlFor="officerId">Officer ID</label>
+              <input
+                type="text"
+                id="officerId"
+                name="officerId"
+                value={formData.officerId}
+                onChange={handleChange}
+                placeholder="Enter Officer ID"
+                required
+              />
             </div>
           )}
 
