@@ -292,20 +292,12 @@ function Landing() {
             <h2 className="section-heading">Get in Touch</h2>
             <p className="section-description">Have questions or want to partner with us? We'd love to hear from you.</p>
 
-            <div className="contact-methods">
-              <div className="contact-method">
-                <div className="contact-icon"><MapPin size={24} /></div>
-                <div>
-                  <h4>Office</h4>
-                  <p>123 Smart City Avenue, Tech District</p>
-                </div>
-              </div>
-              <div className="contact-method">
-                <div className="contact-icon"><Mail size={24} /></div>
-                <div>
-                  <h4>Email</h4>
-                  <p>support@roadsaarthi.com</p>
-                </div>
+
+            <div className="contact-method">
+              <div className="contact-icon"><Mail size={24} /></div>
+              <div>
+                <h4>Email</h4>
+                <p>roadsaarthi@gmail.com</p>
               </div>
             </div>
           </div>
