@@ -20,9 +20,6 @@ app.use(express.json());
 // Enable CORS
 app.use(cors());
 
-// Static folder for uploads
-const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Route files
 const reportRoutes = require('./routes/reportRoutes');

@@ -1,20 +1,26 @@
 const { createClient } = require('redis');
 
-let redisClient;
+let redisClient = null;
 
 const connectRedis = async () => {
-  redisClient = createClient({
-    url: process.env.REDIS_URI || 'redis://localhost:6379'
-  });
-
-  redisClient.on('error', (err) => console.error('Redis Client Error:', err));
-  redisClient.on('connect', () => console.log('Redis Connected'));
-
   try {
+    redisClient = createClient({
+      url: process.env.REDIS_URI || 'redis://localhost:6379',
+      socket: {
+        // Don't retry automatically — app works fine without Redis
+        reconnectStrategy: false,
+        connectTimeout: 3000,
+      },
+    });
+
+    // Only log the first error, then stay silent
+    redisClient.on('error', () => {});
+    redisClient.on('connect', () => console.log('✓ Redis connected'));
+
     await redisClient.connect();
   } catch (error) {
-    console.error(`Failed to connect to Redis: ${error.message}`);
-    // We don't exit the process here so the app can still run without cache
+    console.warn('⚠ Redis unavailable — caching disabled (app will still work)');
+    redisClient = null;
   }
 };
 
@@ -22,5 +28,5 @@ const getRedisClient = () => redisClient;
 
 module.exports = {
   connectRedis,
-  getRedisClient
+  getRedisClient,
 };

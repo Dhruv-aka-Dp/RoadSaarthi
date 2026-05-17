@@ -22,17 +22,17 @@ exports.createReport = async (req, res, next) => {
 
     let finalLat = validatedData.latitude;
     let finalLng = validatedData.longitude;
-    let imageFilename = undefined;
+    let imageUrl = undefined;
 
-    // Process image if it exists
+    // Process image if it exists (uploads to Cloudinary)
     if (req.file) {
-      const { lat, lng, filename } = await processImage(req.file.buffer, req.file.originalname);
-      imageFilename = filename;
+      const result = await processImage(req.file.buffer, req.file.originalname);
+      imageUrl = result.imageUrl;
       
       // Override with GPS if found in EXIF
-      if (lat !== null && lng !== null) {
-        finalLat = lat;
-        finalLng = lng;
+      if (result.lat !== null && result.lng !== null) {
+        finalLat = result.lat;
+        finalLng = result.lng;
       }
     }
 
@@ -45,14 +45,15 @@ exports.createReport = async (req, res, next) => {
     }
 
     // Determine priority based on nearby reports within 5km
+    // Using $geoWithin/$centerSphere instead of $near because
+    // countDocuments() uses aggregation internally where $near is not allowed
     const nearbyReportsCount = await Report.countDocuments({
       location: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [finalLng, finalLat],
-          },
-          $maxDistance: 5000,
+        $geoWithin: {
+          $centerSphere: [
+            [finalLng, finalLat],
+            5 / 6378.1, // 5km radius in radians (Earth radius ≈ 6378.1 km)
+          ],
         },
       },
     });
@@ -67,7 +68,7 @@ exports.createReport = async (req, res, next) => {
     const report = await Report.create({
       title: validatedData.title,
       description: validatedData.description,
-      image: imageFilename ? `/uploads/${imageFilename}` : 'no-photo.jpg',
+      image: imageUrl || 'no-photo.jpg',
       location: {
         type: 'Point',
         coordinates: [finalLng, finalLat],
@@ -99,15 +100,14 @@ exports.getReports = async (req, res, next) => {
 
     let query = {};
 
-    // If spatial parameters are provided, do a geo near query
+    // If spatial parameters are provided, do a geo query
     if (lng && lat && distance) {
       query.location = {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [parseFloat(lng), parseFloat(lat)],
-          },
-          $maxDistance: parseFloat(distance) * 1000, // Distance in meters (e.g., 5km = 5000)
+        $geoWithin: {
+          $centerSphere: [
+            [parseFloat(lng), parseFloat(lat)],
+            parseFloat(distance) / 6378.1, // Convert km to radians (Earth radius ≈ 6378.1 km)
+          ],
         },
       };
     }
