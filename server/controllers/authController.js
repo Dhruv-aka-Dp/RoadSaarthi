@@ -10,13 +10,23 @@ const generateToken = (id) => {
   });
 };
 
-const registerSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
-  email: z.string().email('Please add a valid email'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-  role: z.enum(['user', 'officer', 'admin']).optional(),
-  officerId: z.string().optional(),
-});
+const registerSchema = z
+  .object({
+    name: z.string().min(2, 'Name must be at least 2 characters'),
+    email: z.string().email('Please add a valid email'),
+    password: z.string().min(6, 'Password must be at least 6 characters'),
+    role: z.enum(['user', 'officer', 'admin']).optional(),
+    officerId: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.role === 'officer' && !data.officerId?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['officerId'],
+        message: 'Officer ID is required for officer accounts',
+      });
+    }
+  });
 
 // @desc    Register user
 // @route   POST /api/auth/register
@@ -25,9 +35,36 @@ exports.register = async (req, res, next) => {
   try {
     const validatedData = registerSchema.parse(req.body);
     const { name, email, password, role, officerId } = validatedData;
+    const isAdminCreatingAccount = req.user?.role === 'admin';
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedOfficerId = officerId?.trim();
+    const requestedRole = role || 'user';
+    const finalRole = isAdminCreatingAccount
+      ? requestedRole
+      : requestedRole === 'officer'
+        ? 'officer'
+        : 'user';
+
+    if (!isAdminCreatingAccount && requestedRole === 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin accounts cannot be created from public signup',
+      });
+    }
+
+    if (finalRole === 'officer' && normalizedOfficerId) {
+      const officerIdExists = await User.findOne({ officerId: normalizedOfficerId });
+
+      if (officerIdExists) {
+        return res.status(400).json({
+          success: false,
+          error: 'Officer ID already exists',
+        });
+      }
+    }
 
     // Check if user exists
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ email: normalizedEmail });
 
     if (userExists) {
       return res.status(400).json({ success: false, error: 'User already exists' });
@@ -39,11 +76,11 @@ exports.register = async (req, res, next) => {
 
     // Create user
     const user = await User.create({
-      name,
-      email,
+      name: name.trim(),
+      email: normalizedEmail,
       password: hashedPassword,
-      role: role || 'user',
-      officerId: role === 'officer' ? officerId : null,
+      role: finalRole,
+      officerId: finalRole === 'officer' ? normalizedOfficerId || null : null,
     });
 
     if (user) {
@@ -78,9 +115,10 @@ exports.login = async (req, res, next) => {
   try {
     const validatedData = loginSchema.parse(req.body);
     const { email, password } = validatedData;
+    const normalizedEmail = email.trim().toLowerCase();
 
     // Check for user email
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user) {
       return res.status(401).json({ success: false, error: 'Invalid credentials' });

@@ -29,6 +29,7 @@ function ReportForm({ mode = "page", onSubmitted }) {
   const [preview, setPreview] = useState(null);
   const [location, setLocation] = useState(null);
   const [locLoading, setLocLoading] = useState(false);
+  const [hasAttemptedAutoLocation, setHasAttemptedAutoLocation] = useState(false);
   const [note, setNote] = useState("");
   const [submittedReport, setSubmittedReport] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -44,6 +45,21 @@ function ReportForm({ mode = "page", onSubmitted }) {
       }
     };
   }, [preview]);
+
+  useEffect(() => {
+    if (
+      !image ||
+      location ||
+      locLoading ||
+      hasAttemptedAutoLocation ||
+      !navigator.geolocation
+    ) {
+      return;
+    }
+
+    setHasAttemptedAutoLocation(true);
+    getLocation(true);
+  }, [hasAttemptedAutoLocation, image, location, locLoading]);
 
   const step = preview ? (location || note.trim() ? 3 : 2) : 1;
   const isSubmitDisabled = !image || !note.trim() || submitting;
@@ -67,14 +83,18 @@ function ReportForm({ mode = "page", onSubmitted }) {
     setErrorMessage("");
   };
 
-  const getLocation = () => {
+  const getLocation = (silent = false) => {
     if (!navigator.geolocation) {
-      setErrorMessage("Location is not supported in this browser.");
+      if (!silent) {
+        setErrorMessage("Location is not supported in this browser.");
+      }
       return;
     }
 
     setLocLoading(true);
-    setErrorMessage("");
+    if (!silent) {
+      setErrorMessage("");
+    }
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -93,7 +113,9 @@ function ReportForm({ mode = "page", onSubmitted }) {
             "Your location is unavailable right now. You can still submit if the photo contains GPS data.";
         }
 
-        setErrorMessage(message);
+        if (!silent) {
+          setErrorMessage(message);
+        }
         setLocLoading(false);
       },
       {
@@ -128,6 +150,7 @@ function ReportForm({ mode = "page", onSubmitted }) {
     if (location) {
       formData.append("latitude", String(location.lat));
       formData.append("longitude", String(location.lng));
+      formData.append("locationSource", "browser");
     }
 
     try {
@@ -155,6 +178,7 @@ function ReportForm({ mode = "page", onSubmitted }) {
     setImage(null);
     setPreview(null);
     setLocation(null);
+    setHasAttemptedAutoLocation(false);
     setNote("");
     setSubmittedReport(null);
     setSubmitting(false);
@@ -194,6 +218,9 @@ function ReportForm({ mode = "page", onSubmitted }) {
             <p style={s.successSub}>
               Your local civic team has been notified.{"\n"}Thank you for
               helping!
+            </p>
+            <p style={s.sourcePill}>
+              GPS source: {submittedReport.locationSource || "unknown"}
             </p>
             <div style={s.refPill}>ref #{buildReference(submittedReport)}</div>
             <button style={s.resetBtn} onClick={reset}>
@@ -293,14 +320,16 @@ function ReportForm({ mode = "page", onSubmitted }) {
                 ? "detecting..."
                 : location
                   ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
-                  : "use my location"}
+                  : hasAttemptedAutoLocation
+                    ? "auto-detecting unavailable"
+                    : "use my location"}
             </span>
             {location && <span style={s.locBadge}>detected</span>}
           </div>
           <p style={s.helperText}>
             {location
-              ? "Browser GPS will be sent with this report."
-              : "If location access is skipped, the server will fall back to GPS embedded in the photo when available."}
+              ? "Browser GPS was captured automatically and will be sent with this report."
+              : "We will auto-try browser GPS first, then fall back to GPS embedded in the photo when available."}
           </p>
         </div>
 
@@ -590,6 +619,16 @@ const s = {
     padding: "5px 14px",
     borderRadius: "20px",
     marginTop: "0.9rem",
+    fontWeight: "500",
+  },
+  sourcePill: {
+    marginTop: "0.75rem",
+    marginBottom: 0,
+    fontSize: "11px",
+    color: "#0F6E56",
+    background: "#E1F5EE",
+    padding: "5px 14px",
+    borderRadius: "20px",
     fontWeight: "500",
   },
   resetBtn: {

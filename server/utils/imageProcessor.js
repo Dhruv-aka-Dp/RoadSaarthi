@@ -1,38 +1,63 @@
 const sharp = require('sharp');
-const exifParser = require('exif-parser');
 const cloudinary = require('../config/cloudinary');
+const { parseExifGps } = require('./exifGps');
+const { extractExifGpsInWorker } = require('./exifWorkerClient');
+
+const OUTPUT_IMAGE_SIZE = 800;
+
+const extractGpsMetadata = async (buffer) => {
+  try {
+    const workerResult = await extractExifGpsInWorker(buffer);
+
+    return {
+      ...workerResult,
+      workerUsed: true,
+      fallbackUsed: false,
+    };
+  } catch (workerError) {
+    console.warn('EXIF worker failed, falling back to inline parser:', workerError.message);
+
+    try {
+      const fallbackResult = parseExifGps(buffer);
+
+      return {
+        ...fallbackResult,
+        workerUsed: false,
+        fallbackUsed: true,
+      };
+    } catch (fallbackError) {
+      console.warn('Failed to parse EXIF data:', fallbackError.message);
+
+      return {
+        lat: null,
+        lng: null,
+        hasGps: false,
+        workerUsed: false,
+        fallbackUsed: true,
+      };
+    }
+  }
+};
 
 /**
  * Process the image buffer: extract GPS, compress with sharp,
  * upload to Cloudinary, and return { lat, lng, imageUrl }.
  */
 const processImage = async (buffer, originalFilename) => {
-  let lat = null;
-  let lng = null;
+  const metadata = await extractGpsMetadata(buffer);
 
-  try {
-    // 1. Extract EXIF data (if present)
-    const parser = exifParser.create(buffer);
-    const result = parser.parse();
-    
-    if (result && result.tags) {
-      if (result.tags.GPSLatitude && result.tags.GPSLongitude) {
-        lat = result.tags.GPSLatitude;
-        lng = result.tags.GPSLongitude;
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to parse EXIF data:', err.message);
-    // Continue processing even if EXIF parsing fails
-  }
-
-  // 2. Compress and optimize image using sharp (in memory)
+  // Sharp strips EXIF/metadata by default unless withMetadata() is called.
+  // Re-encoding here intentionally removes location metadata from the stored asset.
   const optimizedBuffer = await sharp(buffer)
-    .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 80 })
+    .rotate()
+    .resize(OUTPUT_IMAGE_SIZE, OUTPUT_IMAGE_SIZE, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .jpeg({ quality: 80, mozjpeg: true })
     .toBuffer();
 
-  // 3. Upload the optimized buffer to Cloudinary
+  // 2. Upload the optimized buffer to Cloudinary
   const uploadResult = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
@@ -52,9 +77,18 @@ const processImage = async (buffer, originalFilename) => {
 
   // Return the extracted data and the Cloudinary secure URL
   return {
-    lat,
-    lng,
+    lat: metadata.lat,
+    lng: metadata.lng,
+    hasGps: metadata.hasGps,
     imageUrl: uploadResult.secure_url,
+    processing: {
+      originalFilename,
+      maxDimension: OUTPUT_IMAGE_SIZE,
+      outputFormat: 'jpeg',
+      exifStripped: true,
+      workerUsed: metadata.workerUsed,
+      fallbackUsed: metadata.fallbackUsed,
+    },
   };
 };
 

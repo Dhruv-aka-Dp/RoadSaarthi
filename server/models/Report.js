@@ -29,6 +29,32 @@ const reportSchema = new mongoose.Schema(
       type: String, // URL/Path to the stored image
       default: 'no-photo.jpg',
     },
+    imageProcessing: {
+      originalFilename: {
+        type: String,
+        default: null,
+      },
+      maxDimension: {
+        type: Number,
+        default: null,
+      },
+      format: {
+        type: String,
+        default: null,
+      },
+      exifStripped: {
+        type: Boolean,
+        default: false,
+      },
+      workerUsed: {
+        type: Boolean,
+        default: false,
+      },
+      fallbackUsed: {
+        type: Boolean,
+        default: false,
+      },
+    },
     status: {
       type: String,
       enum: ['pending', 'assigned', 'resolved'],
@@ -47,6 +73,11 @@ const reportSchema = new mongoose.Schema(
       type: mongoose.Schema.ObjectId,
       ref: 'User',
       default: null, // Depending on if anonymous reports are allowed
+    },
+    locationSource: {
+      type: String,
+      enum: ['browser', 'manual', 'exif', 'unknown'],
+      default: 'unknown',
     },
   },
   {

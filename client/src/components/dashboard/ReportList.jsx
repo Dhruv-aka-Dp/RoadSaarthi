@@ -1,17 +1,23 @@
-import React, { memo } from "react";
+import { memo } from "react";
 import StatusBadge from "./StatusBadge";
 
 const getPriorityLabel = (priority) => {
-  if (priority === 'high') return '🔴 High Priority';
-  if (priority === 'medium') return '🟡 Medium Priority';
-  return '🟢 Low Priority';
+  if (priority === "high") return "High Priority";
+  if (priority === "medium") return "Medium Priority";
+  return "Low Priority";
+};
+
+const formatLocationSource = (source) => {
+  if (source === "browser") return "Browser GPS";
+  if (source === "exif") return "Photo EXIF";
+  if (source === "manual") return "Manual GPS";
+  return "Unknown source";
 };
 
 const ReportList = memo(function ReportList({
   reports,
   loading,
   selectedReportId,
-  markerLookup,
   actionLoading,
   assignmentOfficerId,
   userRole,
@@ -55,7 +61,6 @@ const ReportList = memo(function ReportList({
       {reports.map((report) => {
         const imageUrl = getImageUrl(report.image);
         const isSelected = report._id === selectedReportId;
-        const markerMeta = markerLookup?.get(report._id);
         const isAssignLoading =
           actionLoading?.type === "assign" && actionLoading.id === report._id;
         const isResolveLoading =
@@ -75,7 +80,9 @@ const ReportList = memo(function ReportList({
                 {imageUrl ? (
                   <img src={imageUrl} alt={report.title} />
                 ) : (
-                  <div className={`thumb-placeholder placeholder-${report.status}`}>
+                  <div
+                    className={`thumb-placeholder placeholder-${report.status}`}
+                  >
                     <span>{report.title.slice(0, 2).toUpperCase()}</span>
                   </div>
                 )}
@@ -83,13 +90,16 @@ const ReportList = memo(function ReportList({
 
               <div className="card-body">
                 <div className="card-topline">
-                  <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+                  <div
+                    style={{ display: "flex", gap: "8px", alignItems: "center" }}
+                  >
                     <StatusBadge status={report.status} />
-                    {report.priority && report.priority !== 'low' && (
-                      <span className="priority-badge" style={{fontSize: '0.75rem', fontWeight: 600}}>
-                        {getPriorityLabel(report.priority)}
-                      </span>
-                    )}
+                    <span
+                      className="priority-badge"
+                      style={{ fontSize: "0.75rem", fontWeight: 600 }}
+                    >
+                      {getPriorityLabel(report.priority || "low")}
+                    </span>
                   </div>
                   <span className="card-time">
                     {formatDateLabel(report.createdAt)}
@@ -101,9 +111,7 @@ const ReportList = memo(function ReportList({
 
                 <div className="card-footer">
                   <span>{formatLocationLabel(report)}</span>
-                  <span>
-                    Zoom on map
-                  </span>
+                  <span>{formatLocationSource(report.locationSource)}</span>
                 </div>
               </div>
             </button>

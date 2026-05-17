@@ -5,11 +5,14 @@ const userSchema = new mongoose.Schema(
     name: {
       type: String,
       required: [true, 'Please add a name'],
+      trim: true,
     },
     email: {
       type: String,
       required: [true, 'Please add an email'],
       unique: true,
+      trim: true,
+      lowercase: true,
       match: [
         /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
         'Please add a valid email',
@@ -28,6 +31,7 @@ const userSchema = new mongoose.Schema(
     },
     officerId: {
       type: String,
+      trim: true,
       default: null,
     },
   },

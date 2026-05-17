@@ -128,6 +128,41 @@ const sortReports = (reports, sortBy) => {
   return sorted;
 };
 
+const filterReportsByControls = (reports, searchQuery, statusFilter, sortBy) => {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  const matchedReports = reports.filter((report) => {
+    const matchesStatus =
+      statusFilter === "all" || report.status === statusFilter;
+
+    const matchesSearch =
+      normalizedQuery.length === 0
+        ? true
+        : [report.title, report.description]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedQuery);
+
+    return matchesStatus && matchesSearch;
+  });
+
+  return sortReports(matchedReports, sortBy);
+};
+
+const buildMarkerPreview = (reports) =>
+  reports
+    .filter(
+      (report) =>
+        Array.isArray(report?.location?.coordinates) &&
+        Number.isFinite(report.location.coordinates[0]) &&
+        Number.isFinite(report.location.coordinates[1])
+    )
+    .map((report) => ({
+      id: report._id,
+      lat: report.location.coordinates[1],
+      lng: report.location.coordinates[0],
+    }));
+
 function Dashboard() {
   const [reports, setReports] = useState([]);
   const [hotspots, setHotspots] = useState([]);
@@ -142,8 +177,11 @@ function Dashboard() {
   const [isResizing, setIsResizing] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
+  const [benchmarkStats, setBenchmarkStats] = useState(null);
   const { user: authUser, loading: authLoading } = useContext(AuthContext);
   const navigate = useNavigate();
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
 
   useEffect(() => {
     if (!authLoading && !authUser) {
@@ -153,10 +191,21 @@ function Dashboard() {
 
   const user = authUser || { role: "user", name: "Guest User", officerId: "" };
   const userRole = user.role;
-  const assignmentOfficerId = user.officerId || "";
 
   const deferredSearch = useDeferredValue(searchQuery);
   const layoutRef = useRef(null);
+  const benchmarkEnabled =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("benchmark") === "1";
+
+  const loadHotspots = async () => {
+    try {
+      const hotspotsRes = await API.get("/reports/hotspots");
+      setHotspots(Array.isArray(hotspotsRes.data?.data) ? hotspotsRes.data.data : []);
+    } catch (error) {
+      setHotspots([]);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -272,27 +321,57 @@ function Dashboard() {
   }, [isReportModalOpen]);
 
   const filteredReports = useMemo(() => {
-    const normalizedQuery = deferredSearch.trim().toLowerCase();
-
-    const matchedReports = reports.filter((report) => {
-      const matchesStatus =
-        statusFilter === "all" || report.status === statusFilter;
-
-      const matchesSearch =
-        normalizedQuery.length === 0
-          ? true
-          : [report.title, report.description]
-              .join(" ")
-              .toLowerCase()
-              .includes(normalizedQuery);
-
-      return matchesStatus && matchesSearch;
-    });
-
-    return sortReports(matchedReports, sortBy);
+    return filterReportsByControls(reports, deferredSearch, statusFilter, sortBy);
   }, [deferredSearch, reports, sortBy, statusFilter]);
 
   const markers = useMapMarkers(filteredReports);
+
+  useEffect(() => {
+    if (!benchmarkEnabled) {
+      setBenchmarkStats(null);
+      return;
+    }
+
+    const iterations = reports.length > 100 ? 120 : 240;
+    const startNaive = performance.now();
+
+    for (let index = 0; index < iterations; index += 1) {
+      const nextReports = filterReportsByControls(
+        reports,
+        deferredSearch,
+        statusFilter,
+        sortBy
+      );
+      buildMarkerPreview(nextReports);
+    }
+
+    const naiveDurationMs = performance.now() - startNaive;
+    const startMemoReuse = performance.now();
+
+    for (let index = 0; index < iterations; index += 1) {
+      void filteredReports.length;
+      void markers.length;
+    }
+
+    const memoReuseMs = performance.now() - startMemoReuse;
+
+    setBenchmarkStats({
+      iterations,
+      renderCount: renderCountRef.current,
+      reportCount: reports.length,
+      markerCount: markers.length,
+      naiveDurationMs: naiveDurationMs.toFixed(2),
+      memoReuseMs: memoReuseMs.toFixed(2),
+    });
+  }, [
+    benchmarkEnabled,
+    deferredSearch,
+    filteredReports,
+    markers,
+    reports,
+    sortBy,
+    statusFilter,
+  ]);
 
   const activeSelectedReportId = useMemo(() => {
     if (!filteredReports.length) {
@@ -327,10 +406,6 @@ function Dashboard() {
     ];
   }, [reports]);
 
-  const markerLookup = useMemo(() => {
-    return new Map(markers.map((marker) => [marker.id, marker]));
-  }, [markers]);
-
   const isResetVisible = Math.abs(mapWidth - DEFAULT_MAP_WIDTH) > 0.4;
 
   const replaceReportInState = (nextReport) => {
@@ -355,6 +430,7 @@ function Dashboard() {
     });
     setSelectedReportId(report._id);
     setIsReportModalOpen(false);
+    loadHotspots();
     setToast({
       type: "success",
       title: "Report submitted",
@@ -506,6 +582,19 @@ function Dashboard() {
 
       <StatsBar stats={summaryStats} />
 
+      {benchmarkEnabled && benchmarkStats ? (
+        <div className="preview-banner">
+          <span className="preview-dot" />
+          <span>
+            Benchmark mode: naive recompute {benchmarkStats.naiveDurationMs}ms
+            vs memo reuse {benchmarkStats.memoReuseMs}ms across{" "}
+            {benchmarkStats.iterations} loops. Render count:{" "}
+            {benchmarkStats.renderCount}. Reports: {benchmarkStats.reportCount},
+            markers: {benchmarkStats.markerCount}.
+          </span>
+        </div>
+      ) : null}
+
       {errorMessage ? (
         <div className="error-banner">
           <strong>Backend connection issue</strong>
@@ -616,26 +705,8 @@ function Dashboard() {
                   </select>
                 </label>
 
-                {(userRole === "officer" || userRole === "admin") && (
-                  <label className="officer-shell" htmlFor="assign-officer-id">
-                    <span>Officer ID</span>
-                    <input
-                      id="assign-officer-id"
-                      type="text"
-                      value={assignmentOfficerId}
-                      onChange={(event) => setAssignmentOfficerId(event.target.value)}
-                      placeholder="Required for assign"
-                    />
-                  </label>
-                )}
               </div>
             </div>
-
-            {(userRole === "officer" || userRole === "admin") && (
-              <p className="assignment-hint">
-                Assign actions use the officer ID entered above.
-              </p>
-            )}
 
             <div className="filter-row" role="tablist" aria-label="Status filters">
               {STATUS_FILTERS.map((filterValue) => (
@@ -668,9 +739,7 @@ function Dashboard() {
               reports={filteredReports}
               loading={loading}
               selectedReportId={activeSelectedReportId}
-              markerLookup={markerLookup}
               actionLoading={actionLoading}
-              assignmentOfficerId={assignmentOfficerId}
               userRole={userRole}
               onSelectReport={setSelectedReportId}
               onAssign={handleAssign}

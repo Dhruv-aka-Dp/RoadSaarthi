@@ -1,67 +1,94 @@
-import React, { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReportsMap from "./ReportsMap";
 import StatsBar from "./StatsBar";
 import API from "../../services/api";
 
-function AdminDashboard({ 
-  allReports, 
-  loading, 
-  hotspots, 
-  getImageUrl, 
+const formatLocationSourceLabel = (key) => {
+  if (key === "browser") return "Browser GPS";
+  if (key === "exif") return "Photo EXIF";
+  if (key === "manual") return "Manual GPS";
+  return "Unknown";
+};
+
+function AdminDashboard({
+  allReports,
+  hotspots,
+  getImageUrl,
   formatLocationLabel,
   onAssign,
-  onResolve
+  onResolve,
 }) {
-  const [officerMetrics, setOfficerMetrics] = useState([]);
+  const [analytics, setAnalytics] = useState({
+    locationSource: {},
+    dailyVolume: [],
+    assignmentBreakdown: [],
+    hotspots: [],
+  });
   const [users, setUsers] = useState([]);
   const [userLoading, setUserLoading] = useState(true);
-
+  const [assignmentDrafts, setAssignmentDrafts] = useState({});
   const [showOfficerModal, setShowOfficerModal] = useState(false);
   const [newOfficer, setNewOfficer] = useState({ name: "", email: "" });
 
-  const fetchUsers = async () => {
-    try {
-      setUserLoading(true);
-      const res = await API.get("/auth/users");
-      setUsers(res.data.data || []);
-    } catch (err) {
-      console.error("Failed to fetch users:", err);
-    } finally {
-      setUserLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        setUserLoading(true);
+        const res = await API.get("/auth/users");
+        setUsers(res.data.data || []);
+      } catch (err) {
+        console.error("Failed to fetch users:", err);
+      } finally {
+        setUserLoading(false);
+      }
+    };
+
     fetchUsers();
   }, []);
 
   useEffect(() => {
-    const fetchMetrics = async () => {
+    const fetchAnalytics = async () => {
       try {
-        const res = await API.get("/reports/admin/officer-metrics");
-        setOfficerMetrics(res.data.data);
+        const res = await API.get("/reports/analytics");
+        setAnalytics(res.data.data || {});
       } catch (err) {
-        console.error("Failed to fetch admin metrics:", err);
+        console.error("Failed to fetch analytics:", err);
       }
     };
-    fetchMetrics();
+
+    fetchAnalytics();
   }, [allReports]);
 
-  const officers = useMemo(() => {
-    return users.filter(u => u.role === "officer");
-  }, [users]);
+  useEffect(() => {
+    setAssignmentDrafts((current) => {
+      const next = { ...current };
 
-  const getOfficerName = (offId) => {
-    const found = officers.find(o => o.officerId === offId);
-    return found ? found.name : offId;
+      allReports.forEach((report) => {
+        if (!(report._id in next)) {
+          next[report._id] = report.assignedTo || "";
+        }
+      });
+
+      return next;
+    });
+  }, [allReports]);
+
+  const officers = useMemo(
+    () => users.filter((user) => user.role === "officer"),
+    [users]
+  );
+
+  const getOfficerName = (officerId) => {
+    const foundOfficer = officers.find((officer) => officer.officerId === officerId);
+    return foundOfficer ? foundOfficer.name : officerId;
   };
 
-  // Overall system stats
   const systemStats = useMemo(() => {
     const total = allReports.length;
-    const pending = allReports.filter(r => r.status === "pending").length;
-    const assigned = allReports.filter(r => r.status === "assigned").length;
-    const resolved = allReports.filter(r => r.status === "resolved").length;
+    const pending = allReports.filter((report) => report.status === "pending").length;
+    const assigned = allReports.filter((report) => report.status === "assigned").length;
+    const resolved = allReports.filter((report) => report.status === "resolved").length;
+
     return [
       { label: "Total Submissions", value: total, tone: "neutral" },
       { label: "Pending Investigation", value: pending, tone: "pending" },
@@ -70,55 +97,70 @@ function AdminDashboard({
     ];
   }, [allReports]);
 
-  const markers = allReports.map(report => ({
-    id: report._id,
-    lat: report.location.coordinates[1],
-    lng: report.location.coordinates[0],
-    status: report.status,
-    priority: report.priority,
-    report: report
-  }));
+  const markers = useMemo(() => {
+    return allReports
+      .filter(
+        (report) =>
+          report.location &&
+          Array.isArray(report.location.coordinates) &&
+          report.location.coordinates.length >= 2
+      )
+      .map((report) => ({
+        id: report._id,
+        lat: report.location.coordinates[1],
+        lng: report.location.coordinates[0],
+        status: report.status,
+        priority: report.priority,
+        report,
+      }));
+  }, [allReports]);
 
-  const handleCreateOfficer = async (e) => {
-    e.preventDefault();
-    if (!newOfficer.name || !newOfficer.email) return;
+  const locationSourceEntries = useMemo(() => {
+    return Object.entries(analytics.locationSource || {}).sort(
+      (left, right) => right[1] - left[1]
+    );
+  }, [analytics.locationSource]);
+
+  const handleCreateOfficer = async (event) => {
+    event.preventDefault();
+
+    if (!newOfficer.name || !newOfficer.email) {
+      return;
+    }
 
     try {
       const generatedOfficerId = `OFF-${Math.floor(1000 + Math.random() * 9000)}`;
-      
-      // Register new officer in the live database
+
       await API.post("/auth/register", {
         name: newOfficer.name,
         email: newOfficer.email,
-        password: "Password123", // default secure password
+        password: "Password123",
         role: "officer",
-        officerId: generatedOfficerId
+        officerId: generatedOfficerId,
       });
 
-      // Reload live users list
-      fetchUsers();
+      const usersResponse = await API.get("/auth/users");
+      setUsers(usersResponse.data.data || []);
       setNewOfficer({ name: "", email: "" });
       setShowOfficerModal(false);
     } catch (err) {
       console.error("Failed to register officer:", err);
-      alert(err.response?.data?.error || "Failed to register officer in the database.");
+      alert(
+        err.response?.data?.error ||
+          "Failed to register officer in the database."
+      );
     }
-  };
-
-  const handleToggleUserStatus = (id) => {
-    setUsers(users.map(u => u._id === id ? { ...u, isInactive: !u.isInactive } : u));
   };
 
   return (
     <div className="admin-dashboard">
       <StatsBar stats={systemStats} />
 
-      {/* Manage & Assign Reports section - Full-width, placed above Hotspot Monitoring map */}
-      <div className="users-section" style={{ marginBottom: '30px', marginTop: '20px' }}>
+      <div className="users-section" style={{ marginBottom: "30px", marginTop: "20px" }}>
         <div className="section-header directory-header">
           <div>
             <span className="panel-eyebrow">Report Management</span>
-            <h3>Manage & Assign Reports</h3>
+            <h3>Secure Assignment Workflow</h3>
           </div>
         </div>
 
@@ -130,6 +172,7 @@ function AdminDashboard({
                 <th>Location</th>
                 <th>Priority</th>
                 <th>Status</th>
+                <th>GPS Source</th>
                 <th>Assigned To</th>
                 <th>Action / Assignment</th>
               </tr>
@@ -137,109 +180,179 @@ function AdminDashboard({
             <tbody>
               {allReports.length === 0 ? (
                 <tr>
-                  <td colSpan="6" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                  <td colSpan="7" style={{ textAlign: "center", padding: "20px", color: "#666" }}>
                     No reports available in the database.
                   </td>
                 </tr>
               ) : (
-                allReports.map((report) => (
-                  <tr key={report._id}>
-                    <td className="user-name">
-                      <strong style={{ display: 'block', fontSize: '14px', color: '#113d35' }}>{report.title}</strong>
-                      <span style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>{report.description}</span>
-                    </td>
-                    <td style={{ fontSize: '12px', color: '#555' }}>
-                      {formatLocationLabel(report)}
-                    </td>
-                    <td>
-                      <span className="priority-badge" style={{
-                        padding: '4px 8px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        fontWeight: 'bold',
-                        background: report.priority === 'high' ? '#ffebeb' : report.priority === 'medium' ? '#fff6e6' : '#effaf6',
-                        color: report.priority === 'high' ? '#d93838' : report.priority === 'medium' ? '#e67e22' : '#2ecc71'
-                      }}>
-                        {(report.priority || 'low').toUpperCase()}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`status-indicator status-${report.status}`} style={{ textTransform: 'capitalize' }}>
-                        {report.status}
-                      </span>
-                    </td>
-                    <td style={{ fontWeight: '600', color: report.assignedTo ? '#0f6e56' : '#888', fontSize: '13px' }}>
-                      {report.assignedTo ? (
-                        <span>👤 {getOfficerName(report.assignedTo)} ({report.assignedTo})</span>
-                      ) : report.status === 'resolved' ? (
-                        <span style={{ color: '#2ecc71', fontWeight: 'bold' }}>✔️ N/A (Closed)</span>
-                      ) : (
-                        '⚠️ Unassigned'
-                      )}
-                    </td>
-                    <td>
-                      {report.status === 'resolved' ? (
-                        <span style={{
-                          padding: '6px 12px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 'bold',
-                          background: '#effaf6',
-                          color: '#2ecc71',
-                          display: 'inline-block'
-                        }}>
-                          ✔️ Case Resolved
+                allReports.map((report) => {
+                  const selectedOfficerId =
+                    assignmentDrafts[report._id] ?? report.assignedTo ?? "";
+
+                  return (
+                    <tr key={report._id}>
+                      <td className="user-name">
+                        <strong
+                          style={{
+                            display: "block",
+                            fontSize: "14px",
+                            color: "#113d35",
+                          }}
+                        >
+                          {report.title}
+                        </strong>
+                        <span
+                          style={{
+                            fontSize: "12px",
+                            color: "#666",
+                            fontWeight: "normal",
+                          }}
+                        >
+                          {report.description}
                         </span>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <select
-                            id={`assign-select-${report._id}`}
-                            defaultValue={report.assignedTo || ""}
+                      </td>
+                      <td style={{ fontSize: "12px", color: "#555" }}>
+                        {formatLocationLabel(report)}
+                      </td>
+                      <td>
+                        <span
+                          className="priority-badge"
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: "bold",
+                            background:
+                              report.priority === "high"
+                                ? "#ffebeb"
+                                : report.priority === "medium"
+                                  ? "#fff6e6"
+                                  : "#effaf6",
+                            color:
+                              report.priority === "high"
+                                ? "#d93838"
+                                : report.priority === "medium"
+                                  ? "#e67e22"
+                                  : "#2ecc71",
+                          }}
+                        >
+                          {(report.priority || "low").toUpperCase()}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-indicator status-${report.status}`}
+                          style={{ textTransform: "capitalize" }}
+                        >
+                          {report.status}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: "12px", color: "#56736b", fontWeight: 600 }}>
+                        {formatLocationSourceLabel(report.locationSource)}
+                      </td>
+                      <td
+                        style={{
+                          fontWeight: "600",
+                          color: report.assignedTo ? "#0f6e56" : "#888",
+                          fontSize: "13px",
+                        }}
+                      >
+                        {report.assignedTo ? (
+                          <span>
+                            {getOfficerName(report.assignedTo)} ({report.assignedTo})
+                          </span>
+                        ) : report.status === "resolved" ? (
+                          <span style={{ color: "#2ecc71", fontWeight: "bold" }}>
+                            Closed
+                          </span>
+                        ) : (
+                          "Unassigned"
+                        )}
+                      </td>
+                      <td>
+                        {report.status === "resolved" ? (
+                          <span
                             style={{
-                              padding: '6px 12px',
-                              borderRadius: '6px',
-                              border: '1px solid rgba(17,61,53,0.15)',
-                              background: '#fff',
-                              fontSize: '12px',
-                              color: '#113d35',
-                              cursor: 'pointer'
+                              padding: "6px 12px",
+                              borderRadius: "6px",
+                              fontSize: "12px",
+                              fontWeight: "bold",
+                              background: "#effaf6",
+                              color: "#2ecc71",
+                              display: "inline-block",
                             }}
                           >
-                            <option value="">-- Choose Officer --</option>
-                            {officers.map(off => (
-                              <option key={off._id} value={off.officerId}>
-                                {off.name} ({off.officerId})
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => {
-                              const selectEl = document.getElementById(`assign-select-${report._id}`);
-                              const selectedOffId = selectEl ? selectEl.value : "";
-                              if (selectedOffId) {
-                                onAssign(report._id, selectedOffId);
+                            Case Resolved
+                          </span>
+                        ) : (
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                            <select
+                              value={selectedOfficerId}
+                              onChange={(event) =>
+                                setAssignmentDrafts((current) => ({
+                                  ...current,
+                                  [report._id]: event.target.value,
+                                }))
                               }
-                            }}
-                            className="btn-action-toggle"
-                            style={{
-                              padding: '6px 12px',
-                              background: '#0f6e56',
-                              color: '#fff',
-                              border: 'none',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: 'bold',
-                              cursor: 'pointer',
-                              transition: 'background 0.2s'
-                            }}
-                          >
-                            Assign
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                              style={{
+                                padding: "6px 12px",
+                                borderRadius: "6px",
+                                border: "1px solid rgba(17,61,53,0.15)",
+                                background: "#fff",
+                                fontSize: "12px",
+                                color: "#113d35",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <option value="">-- Choose Officer --</option>
+                              {officers.map((officer) => (
+                                <option key={officer._id} value={officer.officerId}>
+                                  {officer.name} ({officer.officerId})
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() =>
+                                selectedOfficerId && onAssign(report._id, selectedOfficerId)
+                              }
+                              className="btn-action-toggle"
+                              style={{
+                                padding: "6px 12px",
+                                background: "#0f6e56",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontSize: "12px",
+                                fontWeight: "bold",
+                                cursor: selectedOfficerId ? "pointer" : "not-allowed",
+                                opacity: selectedOfficerId ? 1 : 0.55,
+                              }}
+                              disabled={!selectedOfficerId}
+                            >
+                              {report.status === "assigned" ? "Reassign" : "Assign"}
+                            </button>
+                            <button
+                              onClick={() => onResolve(report._id)}
+                              className="btn-action-toggle"
+                              style={{
+                                padding: "6px 12px",
+                                background: "#124b40",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontSize: "12px",
+                                fontWeight: "bold",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Resolve
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -250,17 +363,77 @@ function AdminDashboard({
         <div className="admin-main">
           <div className="section-header">
             <span className="panel-eyebrow">Real-Time Heatmap</span>
-            <h2>System-Wide Hotspot Monitoring</h2>
+            <h2>Bucketed Hotspot Monitoring</h2>
           </div>
 
           <div className="map-surface admin-map">
-            <ReportsMap 
-              markers={markers} 
+            <ReportsMap
+              markers={markers}
               hotspots={hotspots}
               getImageUrl={getImageUrl}
             />
           </div>
 
+          <div className="analytics-grid">
+            <div className="analytics-card">
+              <div className="section-header">
+                <span className="panel-eyebrow">Facet Output</span>
+                <h3>Location Source Breakdown</h3>
+              </div>
+
+              <div className="source-breakdown-list">
+                {locationSourceEntries.length ? (
+                  locationSourceEntries.map(([source, count]) => (
+                    <div key={source} className="source-breakdown-item">
+                      <span>{formatLocationSourceLabel(source)}</span>
+                      <strong>{count}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <div className="empty-state-box">
+                    No location-source analytics available yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="analytics-card">
+              <div className="section-header">
+                <span className="panel-eyebrow">Facet Output</span>
+                <h3>7-Day Volume Trend</h3>
+              </div>
+
+              <div className="trend-list">
+                {(analytics.dailyVolume || []).length ? (
+                  analytics.dailyVolume.map((point) => {
+                    const maxCount = Math.max(
+                      1,
+                      ...(analytics.dailyVolume || []).map((entry) => entry.count)
+                    );
+
+                    return (
+                      <div key={point.date} className="trend-row">
+                        <span>{point.date.slice(5)}</span>
+                        <div className="trend-bar-shell">
+                          <div
+                            className="trend-bar-fill"
+                            style={{
+                              width: `${(point.count / maxCount) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <strong>{point.count}</strong>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="empty-state-box">
+                    No daily trend data available yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="admin-side">
@@ -270,17 +443,28 @@ function AdminDashboard({
           </div>
 
           <div className="officer-metrics-list">
-            {officerMetrics.length > 0 ? (
-              officerMetrics.map(metric => (
+            {(analytics.assignmentBreakdown || []).length > 0 ? (
+              analytics.assignmentBreakdown.map((metric) => (
                 <div key={metric.officerId} className="officer-metric-card">
                   <div className="metric-header">
                     <strong>Officer: {getOfficerName(metric.officerId)}</strong>
-                    <span className="metric-rate">{metric.resolutionRate.toFixed(0)}% Resolved</span>
+                    <span className="metric-rate">
+                      {metric.resolutionRate.toFixed(0)}% Resolved
+                    </span>
                   </div>
                   <div className="metric-stats">
-                    <div>Assigned: <strong>{metric.totalAssigned}</strong></div>
-                    <div>Pending: <strong>{metric.pending}</strong></div>
-                    <div>Resolved: <strong>{metric.resolved}</strong></div>
+                    <div>
+                      Assigned: <strong>{metric.totalAssigned}</strong>
+                    </div>
+                    <div>
+                      Pending: <strong>{metric.pending}</strong>
+                    </div>
+                    <div>
+                      Resolved: <strong>{metric.resolved}</strong>
+                    </div>
+                  </div>
+                  <div className="metric-alert-line">
+                    High-priority open cases: <strong>{metric.highPriorityOpen}</strong>
                   </div>
                 </div>
               ))
@@ -296,17 +480,22 @@ function AdminDashboard({
               <span className="panel-eyebrow">Hotspot Alarms</span>
               <h3>Critical Zones</h3>
             </div>
-            
+
             <div className="critical-zones-list">
-              {hotspots.map((hotspot, idx) => (
-                <div key={idx} className="critical-zone-card">
+              {(analytics.hotspots || hotspots).map((hotspot, index) => (
+                <div key={hotspot.zoneId || index} className="critical-zone-card">
                   <div className="zone-info">
-                    <strong className="zone-title">Zone {idx + 1}</strong>
-                    <div className="zone-coords">Lat {hotspot.lat.toFixed(3)} / Lng {hotspot.lng.toFixed(3)}</div>
+                    <strong className="zone-title">
+                      Zone {hotspot.zoneId ?? index + 1}
+                    </strong>
+                    <div className="zone-coords">
+                      Lat {hotspot.lat.toFixed(3)} / Lng {hotspot.lng.toFixed(3)}
+                    </div>
+                    <div className="zone-coords">
+                      Severity: {(hotspot.severity || "low").toUpperCase()}
+                    </div>
                   </div>
-                  <span className="zone-count-badge">
-                    {hotspot.count} Reports
-                  </span>
+                  <span className="zone-count-badge">{hotspot.count} Reports</span>
                 </div>
               ))}
             </div>
@@ -314,18 +503,17 @@ function AdminDashboard({
         </div>
       </div>
 
-      {/* User Directory section - Full width at the bottom */}
-      <div className="users-section" style={{ marginTop: '30px' }}>
+      <div className="users-section" style={{ marginTop: "30px" }}>
         <div className="section-header directory-header">
           <div>
             <span className="panel-eyebrow">User Directory</span>
             <h3>System Accounts</h3>
           </div>
-          <button 
+          <button
             onClick={() => setShowOfficerModal(true)}
             className="btn-register"
           >
-            + Register Officer
+            Register Officer
           </button>
         </div>
 
@@ -336,45 +524,34 @@ function AdminDashboard({
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Officer ID</th>
                 <th>Status</th>
-                <th>Action</th>
               </tr>
             </thead>
             <tbody>
               {userLoading ? (
                 <tr>
-                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                  <td colSpan="5" style={{ textAlign: "center", padding: "20px", color: "#666" }}>
                     Loading system accounts...
                   </td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                  <td colSpan="5" style={{ textAlign: "center", padding: "20px", color: "#666" }}>
                     No system accounts found.
                   </td>
                 </tr>
               ) : (
-                users.map(u => (
-                  <tr key={u._id}>
-                    <td className="user-name">{u.name}</td>
-                    <td>{u.email}</td>
+                users.map((user) => (
+                  <tr key={user._id}>
+                    <td className="user-name">{user.name}</td>
+                    <td>{user.email}</td>
                     <td>
-                      <span className={`role-badge role-${u.role}`}>
-                        {u.role}
-                      </span>
+                      <span className={`role-badge role-${user.role}`}>{user.role}</span>
                     </td>
+                    <td>{user.officerId || "-"}</td>
                     <td>
-                      <span className={`status-indicator status-${u.isInactive ? 'inactive' : 'active'}`}>
-                        {u.isInactive ? '● Inactive' : '● Active'}
-                      </span>
-                    </td>
-                    <td>
-                      <button 
-                        onClick={() => handleToggleUserStatus(u._id)}
-                        className="btn-action-toggle"
-                      >
-                        {u.isInactive ? 'Activate' : 'Deactivate'}
-                      </button>
+                      <span className="status-indicator status-active">Active</span>
                     </td>
                   </tr>
                 ))
@@ -391,34 +568,41 @@ function AdminDashboard({
             <form onSubmit={handleCreateOfficer} className="modal-form">
               <div className="form-group">
                 <label>Name</label>
-                <input 
-                  type="text" 
-                  value={newOfficer.name} 
-                  onChange={e => setNewOfficer({ ...newOfficer, name: e.target.value })}
+                <input
+                  type="text"
+                  value={newOfficer.name}
+                  onChange={(event) =>
+                    setNewOfficer((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
                   required
                 />
               </div>
               <div className="form-group">
                 <label>Email</label>
-                <input 
-                  type="email" 
-                  value={newOfficer.email} 
-                  onChange={e => setNewOfficer({ ...newOfficer, email: e.target.value })}
+                <input
+                  type="email"
+                  value={newOfficer.email}
+                  onChange={(event) =>
+                    setNewOfficer((current) => ({
+                      ...current,
+                      email: event.target.value,
+                    }))
+                  }
                   required
                 />
               </div>
               <div className="modal-actions">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setShowOfficerModal(false)}
                   className="btn-cancel"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit"
-                  className="btn-save"
-                >
+                <button type="submit" className="btn-save">
                   Save
                 </button>
               </div>

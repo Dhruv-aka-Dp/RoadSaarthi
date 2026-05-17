@@ -37,13 +37,24 @@ const AuthModal = () => {
       if (isLogin) {
         await login(formData.email, formData.password);
       } else {
-        await register(formData.name, formData.email, formData.password, formData.role, formData.officerId);
+        await register(
+          formData.name,
+          formData.email,
+          formData.password,
+          formData.role,
+          formData.officerId
+        );
       }
 
       // Navigate to dashboard after successful auth
       navigate('/dashboard');
     } catch (err) {
-      setError(err.response?.data?.error || 'Authentication failed. Please try again.');
+      setError(
+        err.response?.data?.error ||
+          (err.message === 'Network Error'
+            ? 'Could not reach the server. Make sure the backend is running.'
+            : 'Authentication failed. Please try again.')
+      );
     } finally {
       setLoading(false);
     }

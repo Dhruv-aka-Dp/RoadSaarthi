@@ -1,60 +1,143 @@
 const Report = require('../models/Report');
+const User = require('../models/User');
 const { z } = require('zod');
 const { processImage } = require('../utils/imageProcessor');
 const sendEmail = require('../utils/sendEmail');
 const { getRedisClient } = require('../config/redis');
+const {
+  buildHotspotAggregation,
+  buildAnalyticsPipeline,
+  normalizeAnalytics,
+} = require('../utils/reportAnalytics');
 
-// Validation schema for creating a report
+const HOTSPOT_CACHE_KEY = 'hotspots';
+const ANALYTICS_CACHE_KEY = 'analytics-summary';
+const CACHE_TTL_SECONDS = 600;
+
 const createReportSchema = z.object({
   title: z.string().min(1, 'Title is required').max(100),
   description: z.string().min(1, 'Description is required').max(500),
-  // Make these optional here; we validate the final presence later 
   longitude: z.coerce.number().optional(),
   latitude: z.coerce.number().optional(),
+  locationSource: z.enum(['browser', 'manual']).optional(),
 });
+
+const getAccessMatchForUser = (user) => {
+  if (!user) {
+    return {};
+  }
+
+  if (user.role === 'user') {
+    return { createdBy: user._id };
+  }
+
+  if (user.role === 'officer') {
+    return { assignedTo: user.officerId };
+  }
+
+  return {};
+};
+
+const invalidateAnalyticsCaches = async (...keys) => {
+  const redisClient = getRedisClient();
+
+  if (!redisClient || !redisClient.isReady || keys.length === 0) {
+    return;
+  }
+
+  await redisClient.del(...keys);
+};
+
+const getCachedPayload = async (cacheKey) => {
+  const redisClient = getRedisClient();
+
+  if (!redisClient || !redisClient.isReady) {
+    return null;
+  }
+
+  const cached = await redisClient.get(cacheKey);
+  return cached ? JSON.parse(cached) : null;
+};
+
+const setCachedPayload = async (cacheKey, payload, ttl = CACHE_TTL_SECONDS) => {
+  const redisClient = getRedisClient();
+
+  if (!redisClient || !redisClient.isReady) {
+    return;
+  }
+
+  await redisClient.setEx(cacheKey, ttl, JSON.stringify(payload));
+};
+
+const getOrBuildAnalytics = async (baseMatch = {}, useCache = false) => {
+  const shouldUseSharedCache = useCache && Object.keys(baseMatch).length === 0;
+
+  if (shouldUseSharedCache) {
+    const cached = await getCachedPayload(ANALYTICS_CACHE_KEY);
+    if (cached) {
+      return { analytics: cached, source: 'cache' };
+    }
+  }
+
+  const [rawAnalytics = {}] = await Report.aggregate(
+    buildAnalyticsPipeline(baseMatch)
+  );
+  const normalized = normalizeAnalytics(rawAnalytics);
+
+  if (shouldUseSharedCache) {
+    await setCachedPayload(ANALYTICS_CACHE_KEY, normalized, 300);
+  }
+
+  return {
+    analytics: normalized,
+    source: 'database',
+  };
+};
 
 // @desc    Create new report
 // @route   POST /api/reports
-// @access  Public (for now)
+// @access  Private
 exports.createReport = async (req, res, next) => {
   try {
-    // Validate input
     const validatedData = createReportSchema.parse(req.body);
 
     let finalLat = validatedData.latitude;
     let finalLng = validatedData.longitude;
-    let imageUrl = undefined;
+    let locationSource =
+      validatedData.locationSource ||
+      (finalLat !== undefined && finalLng !== undefined ? 'manual' : 'unknown');
+    let imageUrl;
+    let imageProcessing;
 
-    // Process image if it exists (uploads to Cloudinary)
     if (req.file) {
       const result = await processImage(req.file.buffer, req.file.originalname);
       imageUrl = result.imageUrl;
-      
-      // Override with GPS if found in EXIF
-      if (result.lat !== null && result.lng !== null) {
+      imageProcessing = result.processing;
+
+      if (result.hasGps) {
         finalLat = result.lat;
         finalLng = result.lng;
+        locationSource = 'exif';
       }
     }
 
-    // Fallback assertion
-    if (finalLat === undefined || finalLng === undefined || isNaN(finalLat) || isNaN(finalLng)) {
+    if (
+      finalLat === undefined ||
+      finalLng === undefined ||
+      Number.isNaN(finalLat) ||
+      Number.isNaN(finalLng)
+    ) {
       return res.status(400).json({
         success: false,
-        error: 'Location coordinates (latitude and longitude) are required. They must be provided manually or embedded via image EXIF data.'
+        error:
+          'Location coordinates are required. Provide browser/manual GPS data or upload a photo with EXIF GPS metadata.',
       });
     }
 
-    // Determine priority based on nearby reports within 5km
-    // Using $geoWithin/$centerSphere instead of $near because
-    // countDocuments() uses aggregation internally where $near is not allowed
     const nearbyReportsCount = await Report.countDocuments({
       location: {
         $geoWithin: {
-          $centerSphere: [
-            [finalLng, finalLat],
-            5 / 6378.1, // 5km radius in radians (Earth radius ≈ 6378.1 km)
-          ],
+          $centerSphere: [[finalLng, finalLat], 5 / 6378.1],
         },
       },
     });
@@ -70,31 +153,33 @@ exports.createReport = async (req, res, next) => {
       title: validatedData.title,
       description: validatedData.description,
       image: imageUrl || 'no-photo.jpg',
+      imageProcessing: imageProcessing || undefined,
       location: {
         type: 'Point',
         coordinates: [finalLng, finalLat],
       },
+      locationSource,
       priority,
-      createdBy: req.user ? req.user._id : null,
+      createdBy: req.user._id,
     });
 
-    // Send email notification for new report
     try {
       await sendEmail({
         to: process.env.CONTACT_EMAIL || 'admin@roadsaarthi.com',
         subject: `New Road Report: ${report.title}`,
-        text: `A new road report has been submitted.\n\nTitle: ${report.title}\nDescription: ${report.description}\nPriority: ${priority}\nLocation: ${finalLat}, ${finalLng}`,
+        text:
+          `A new road report has been submitted.\n\n` +
+          `Title: ${report.title}\n` +
+          `Description: ${report.description}\n` +
+          `Priority: ${priority}\n` +
+          `Location: ${finalLat}, ${finalLng}\n` +
+          `Location Source: ${locationSource}`,
       });
     } catch (emailErr) {
       console.error('Email notification failed:', emailErr.message);
-      // Don't fail the whole request if email fails
     }
 
-    // Invalidate the hotspots cache on new report
-    const redisClient = getRedisClient();
-    if (redisClient && redisClient.isReady) {
-      await redisClient.del('hotspots');
-    }
+    await invalidateAnalyticsCaches(HOTSPOT_CACHE_KEY, ANALYTICS_CACHE_KEY);
 
     res.status(201).json({
       success: true,
@@ -107,33 +192,24 @@ exports.createReport = async (req, res, next) => {
 
 // @desc    Get all reports (with optional spatial filtering)
 // @route   GET /api/reports
-// @access  Public
+// @access  Private
 exports.getReports = async (req, res, next) => {
   try {
     const { lng, lat, distance } = req.query;
+    const query = getAccessMatchForUser(req.user);
 
-    let query = {};
-
-    // Filter by role: citizen only sees their own, officer sees assigned, admin sees all
-    if (req.user && req.user.role === 'user') {
-      query.createdBy = req.user._id;
-    } else if (req.user && req.user.role === 'officer') {
-      query.assignedTo = req.user.officerId;
-    }
-
-    // If spatial parameters are provided, do a geo query
     if (lng && lat && distance) {
       query.location = {
         $geoWithin: {
           $centerSphere: [
             [parseFloat(lng), parseFloat(lat)],
-            parseFloat(distance) / 6378.1, // Convert km to radians (Earth radius ≈ 6378.1 km)
+            parseFloat(distance) / 6378.1,
           ],
         },
       };
     }
 
-    const reports = await Report.find(query);
+    const reports = await Report.find(query).sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -147,30 +223,53 @@ exports.getReports = async (req, res, next) => {
 
 // @desc    Assign report to officer
 // @route   PATCH /api/reports/:id/assign
-// @access  Private (Admin/Officer role ideally)
+// @access  Private (Admin)
 exports.assignReport = async (req, res, next) => {
   try {
     const { officerId } = req.body;
 
     if (!officerId) {
-      return res.status(400).json({ success: false, error: 'Please provide an officerId' });
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide an officerId',
+      });
     }
 
-    let report = await Report.findById(req.params.id);
+    const officer = await User.findOne({ officerId, role: 'officer' });
+    if (!officer) {
+      return res.status(404).json({
+        success: false,
+        error: `Officer not found for officerId ${officerId}`,
+      });
+    }
+
+    const report = await Report.findById(req.params.id);
 
     if (!report) {
-      return res.status(404).json({ success: false, error: `Report not found with id ${req.params.id}` });
+      return res.status(404).json({
+        success: false,
+        error: `Report not found with id ${req.params.id}`,
+      });
     }
 
-    report = await Report.findByIdAndUpdate(
+    if (report.status === 'resolved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Resolved reports cannot be reassigned',
+      });
+    }
+
+    const updatedReport = await Report.findByIdAndUpdate(
       req.params.id,
       { assignedTo: officerId, status: 'assigned' },
       { new: true, runValidators: true }
     );
 
+    await invalidateAnalyticsCaches(ANALYTICS_CACHE_KEY);
+
     res.status(200).json({
       success: true,
-      data: report,
+      data: updatedReport,
     });
   } catch (err) {
     next(err);
@@ -179,24 +278,39 @@ exports.assignReport = async (req, res, next) => {
 
 // @desc    Resolve report
 // @route   PATCH /api/reports/:id/resolve
-// @access  Private (Admin/Officer role ideally)
+// @access  Private (Officer/Admin)
 exports.resolveReport = async (req, res, next) => {
   try {
-    let report = await Report.findById(req.params.id);
+    const report = await Report.findById(req.params.id);
 
     if (!report) {
-      return res.status(404).json({ success: false, error: `Report not found with id ${req.params.id}` });
+      return res.status(404).json({
+        success: false,
+        error: `Report not found with id ${req.params.id}`,
+      });
     }
 
-    report = await Report.findByIdAndUpdate(
+    if (
+      req.user.role === 'officer' &&
+      report.assignedTo !== req.user.officerId
+    ) {
+      return res.status(403).json({
+        success: false,
+        error: 'Officers can only resolve reports assigned to their own officer ID',
+      });
+    }
+
+    const updatedReport = await Report.findByIdAndUpdate(
       req.params.id,
       { status: 'resolved' },
       { new: true, runValidators: true }
     );
 
+    await invalidateAnalyticsCaches(ANALYTICS_CACHE_KEY);
+
     res.status(200).json({
       success: true,
-      data: report,
+      data: updatedReport,
     });
   } catch (err) {
     next(err);
@@ -208,68 +322,23 @@ exports.resolveReport = async (req, res, next) => {
 // @access  Public
 exports.getHotspots = async (req, res, next) => {
   try {
-    const redisClient = getRedisClient();
+    const cachedHotspots = await getCachedPayload(HOTSPOT_CACHE_KEY);
 
-    // 1. Check cache first
-    if (redisClient && redisClient.isReady) {
-      const cachedHotspots = await redisClient.get('hotspots');
-      if (cachedHotspots) {
-        return res.status(200).json({
-          success: true,
-          data: JSON.parse(cachedHotspots),
-          source: 'cache'
-        });
-      }
+    if (cachedHotspots) {
+      return res.status(200).json({
+        success: true,
+        data: cachedHotspots,
+        source: 'cache',
+      });
     }
 
-    const hotspots = await Report.aggregate([
-      {
-        $project: {
-          // Round coordinates to 2 decimal places (~1.1km precision)
-          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
-          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
-        },
-      },
-      {
-        $group: {
-          _id: { lng: '$roundedLng', lat: '$roundedLat' },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $match: {
-          // Only consider it a hotspot if there's more than 1 report
-          count: { $gt: 1 },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          lat: '$_id.lat',
-          lng: '$_id.lng',
-          count: 1,
-          severity: {
-            $switch: {
-              branches: [
-                { case: { $gte: ['$count', 5] }, then: 'high' },
-                { case: { $gte: ['$count', 2] }, then: 'medium' },
-              ],
-              default: 'low',
-            },
-          },
-        },
-      },
-    ]);
-
-    // 2. Save to cache with 10-minute TTL (600 seconds)
-    if (redisClient && redisClient.isReady) {
-      await redisClient.setEx('hotspots', 600, JSON.stringify(hotspots));
-    }
+    const hotspots = await Report.aggregate(buildHotspotAggregation({}, 2));
+    await setCachedPayload(HOTSPOT_CACHE_KEY, hotspots);
 
     res.status(200).json({
       success: true,
       data: hotspots,
-      source: 'database'
+      source: 'database',
     });
   } catch (err) {
     next(err);
@@ -278,44 +347,40 @@ exports.getHotspots = async (req, res, next) => {
 
 // @desc    Get dashboard summary statistics
 // @route   GET /api/reports/stats
-// @access  Public
+// @access  Private
 exports.getDashboardStats = async (req, res, next) => {
   try {
-    const totalReports = await Report.countDocuments();
-    const pendingReports = await Report.countDocuments({ status: 'pending' });
-    const assignedReports = await Report.countDocuments({ status: 'assigned' });
-    const resolvedReports = await Report.countDocuments({ status: 'resolved' });
-    
-    // Calculate hotspots count (re-using the logic from getHotspots)
-    const hotspotData = await Report.aggregate([
-      {
-        $project: {
-          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
-          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
-        },
-      },
-      {
-        $group: {
-          _id: { lng: '$roundedLng', lat: '$roundedLat' },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $match: {
-          count: { $gt: 1 },
-        },
-      },
-    ]);
+    const baseMatch = getAccessMatchForUser(req.user);
+    const { analytics } = await getOrBuildAnalytics(baseMatch);
 
     res.status(200).json({
       success: true,
       data: {
-        total: totalReports,
-        pending: pendingReports,
-        assigned: assignedReports,
-        resolved: resolvedReports,
-        hotspots: hotspotData.length,
+        total: analytics.totals.reports,
+        pending: analytics.status.pending || 0,
+        assigned: analytics.status.assigned || 0,
+        resolved: analytics.status.resolved || 0,
+        hotspots: analytics.totals.hotspots,
+        highPriority: analytics.priority.high || 0,
+        locationSource: analytics.locationSource,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get full analytics summary
+// @route   GET /api/reports/analytics
+// @access  Private (Admin)
+exports.getAnalyticsSummary = async (req, res, next) => {
+  try {
+    const { analytics, source } = await getOrBuildAnalytics({}, true);
+
+    res.status(200).json({
+      success: true,
+      data: analytics,
+      source,
     });
   } catch (err) {
     next(err);
@@ -329,17 +394,33 @@ exports.getOfficerStats = async (req, res, next) => {
   try {
     const { officerId } = req.params;
 
+    if (
+      req.user.role === 'officer' &&
+      req.user.officerId !== officerId
+    ) {
+      return res.status(403).json({
+        success: false,
+        error: 'Officers can only view their own assignment metrics',
+      });
+    }
+
     const assigned = await Report.countDocuments({ assignedTo: officerId });
-    const pending = await Report.countDocuments({ assignedTo: officerId, status: 'assigned' }); // Pending for this officer
-    const resolved = await Report.countDocuments({ assignedTo: officerId, status: 'resolved' });
-    
-    // Resolved today
+    const pending = await Report.countDocuments({
+      assignedTo: officerId,
+      status: 'assigned',
+    });
+    const resolved = await Report.countDocuments({
+      assignedTo: officerId,
+      status: 'resolved',
+    });
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
-    const resolvedToday = await Report.countDocuments({ 
-      assignedTo: officerId, 
+
+    const resolvedToday = await Report.countDocuments({
+      assignedTo: officerId,
       status: 'resolved',
-      updatedAt: { $gte: startOfToday }
+      updatedAt: { $gte: startOfToday },
     });
 
     const resolutionRate = assigned > 0 ? (resolved / assigned) * 100 : 0;
@@ -349,8 +430,8 @@ exports.getOfficerStats = async (req, res, next) => {
       data: {
         totalAssigned: assigned,
         pendingForOfficer: pending,
-        resolved: resolved,
-        resolvedToday: resolvedToday,
+        resolved,
+        resolvedToday,
         resolutionPercentage: resolutionRate.toFixed(1),
       },
     });
@@ -364,38 +445,11 @@ exports.getOfficerStats = async (req, res, next) => {
 // @access  Private (Admin)
 exports.getAdminOfficerMetrics = async (req, res, next) => {
   try {
-    const metrics = await Report.aggregate([
-      {
-        $match: { assignedTo: { $ne: null } }
-      },
-      {
-        $group: {
-          _id: '$assignedTo',
-          totalAssigned: { $sum: 1 },
-          resolved: {
-            $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] }
-          },
-          pending: {
-            $sum: { $cond: [{ $eq: ['$status', 'assigned'] }, 1, 0] }
-          }
-        }
-      },
-      {
-        $project: {
-          officerId: '$_id',
-          totalAssigned: 1,
-          resolved: 1,
-          pending: 1,
-          resolutionRate: {
-            $multiply: [{ $divide: ['$resolved', '$totalAssigned'] }, 100]
-          }
-        }
-      }
-    ]);
+    const { analytics } = await getOrBuildAnalytics({}, true);
 
     res.status(200).json({
       success: true,
-      data: metrics,
+      data: analytics.assignmentBreakdown,
     });
   } catch (err) {
     next(err);
