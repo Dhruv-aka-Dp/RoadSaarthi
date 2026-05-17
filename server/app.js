@@ -2,13 +2,15 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const { connectRedis } = require('./config/redis');
 const errorHandler = require('./middleware/errorHandler');
 
 // Load env vars
 dotenv.config();
 
-// Connect to database
+// Connect to databases
 connectDB();
+connectRedis();
 
 const app = express();
 
@@ -18,9 +20,6 @@ app.use(express.json());
 // Enable CORS
 app.use(cors());
 
-// Static folder for uploads
-const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Route files
 const reportRoutes = require('./routes/reportRoutes');

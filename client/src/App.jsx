@@ -3,16 +3,23 @@ import Landing from "./pages/Landing";
 import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import ReportPage from "./pages/ReportPage";
+import AuthModal from "./components/auth/AuthModal";
+import { AuthProvider } from "./context/AuthContext";
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/report" element={<ReportPage />} />
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Landing />}>
+            <Route path="signup" element={<AuthModal />} />
+            <Route path="login" element={<AuthModal />} />
+          </Route>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/report" element={<ReportPage />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 

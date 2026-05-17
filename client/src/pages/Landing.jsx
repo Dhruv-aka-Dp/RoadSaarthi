@@ -358,6 +358,8 @@ function Landing() {
         </div>
       </section>
 
+      {/* Render AuthModal if route matches /login or /signup */}
+      <Outlet />
     </div>
   );
 }

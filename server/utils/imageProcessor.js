@@ -1,15 +1,10 @@
 const sharp = require('sharp');
 const exifParser = require('exif-parser');
-const path = require('path');
-const fs = require('fs/promises');
-
-// Ensure uploads directory exists
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
-fs.mkdir(UPLOADS_DIR, { recursive: true }).catch(console.error);
+const cloudinary = require('../config/cloudinary');
 
 /**
- * Process the image buffer: extract GPS, compress, and save locally.
- * Returns an object with { lat, lng, filename } or just { filename } if no GPS.
+ * Process the image buffer: extract GPS, compress with sharp,
+ * upload to Cloudinary, and return { lat, lng, imageUrl }.
  */
 const processImage = async (buffer, originalFilename) => {
   let lat = null;
@@ -31,23 +26,38 @@ const processImage = async (buffer, originalFilename) => {
     // Continue processing even if EXIF parsing fails
   }
 
-  // 2. Compress and optimize image using sharp
-  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(originalFilename || '.jpg')}`;
-  const filepath = path.join(UPLOADS_DIR, filename);
+  // 2. Compress and optimize image using sharp (in memory)
+  const optimizedBuffer = await sharp(buffer)
+    .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer();
 
-  await sharp(buffer)
-    .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true }) // Max 1024x1024
-    .jpeg({ quality: 80 }) // Compress to 80% JPEG
-    .toFile(filepath);
+  // 3. Upload the optimized buffer to Cloudinary
+  const uploadResult = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'roadsarthi_reports',
+        resource_type: 'image',
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      }
+    );
+    stream.end(optimizedBuffer);
+  });
 
-  // Return the extracted data and filename
+  // Return the extracted data and the Cloudinary secure URL
   return {
     lat,
     lng,
-    filename
+    imageUrl: uploadResult.secure_url,
   };
 };
 
 module.exports = {
-  processImage
+  processImage,
 };
