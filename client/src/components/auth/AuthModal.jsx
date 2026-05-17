@@ -139,16 +139,6 @@ const AuthModal = () => {
                   />
                   <span>Officer</span>
                 </label>
-                <label className={`role-option ${formData.role === 'admin' ? 'active' : ''}`}>
-                  <input
-                    type="radio"
-                    name="role"
-                    value="admin"
-                    checked={formData.role === 'admin'}
-                    onChange={handleChange}
-                  />
-                  <span>Admin</span>
-                </label>
               </div>
             </div>
           )}
