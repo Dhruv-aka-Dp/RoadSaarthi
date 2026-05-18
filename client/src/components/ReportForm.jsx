@@ -11,7 +11,7 @@ const buildTitle = (note) => {
   }
 
   const summary = cleanedNote.split(" ").slice(0, 8).join(" ");
-  const title = `Pothole: ${summary}`;
+  const title = summary;
 
   return title.length > 100 ? `${title.slice(0, 97)}...` : title;
 };
@@ -59,7 +59,7 @@ function ReportForm({ mode = "page", onSubmitted }) {
 
     setHasAttemptedAutoLocation(true);
     getLocation(true);
-  }, [hasAttemptedAutoLocation, image, location, locLoading]);
+  }, [image, location, locLoading]);
 
   const step = preview ? (location || note.trim() ? 3 : 2) : 1;
   const isSubmitDisabled = !image || !note.trim() || submitting;
