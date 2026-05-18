@@ -1,5 +1,5 @@
-const sharp = require('sharp');
-const exifParser = require('exif-parser');
+const { Worker } = require('worker_threads');
+const path = require('path');
 const cloudinary = require('../config/cloudinary');
 
 /**
@@ -7,30 +7,34 @@ const cloudinary = require('../config/cloudinary');
  * upload to Cloudinary, and return { lat, lng, imageUrl }.
  */
 const processImage = async (buffer, originalFilename) => {
-  let lat = null;
-  let lng = null;
-
-  try {
-    // 1. Extract EXIF data (if present)
-    const parser = exifParser.create(buffer);
-    const result = parser.parse();
+  // 1 & 2: Use worker thread for CPU-intensive EXIF parsing and sharp compression
+  const workerResult = await new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, '..', 'workers', 'imageWorker.js');
+    const worker = new Worker(workerPath);
     
-    if (result && result.tags) {
-      if (result.tags.GPSLatitude && result.tags.GPSLongitude) {
-        lat = result.tags.GPSLatitude;
-        lng = result.tags.GPSLongitude;
+    worker.on('message', (message) => {
+      if (message.success) {
+        resolve(message);
+      } else {
+        reject(new Error(message.error));
       }
-    }
-  } catch (err) {
-    console.warn('Failed to parse EXIF data:', err.message);
-    // Continue processing even if EXIF parsing fails
-  }
+      worker.terminate();
+    });
+    
+    worker.on('error', (err) => {
+      reject(err);
+      worker.terminate();
+    });
+    
+    worker.on('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Worker stopped with exit code ${code}`));
+      }
+    });
 
-  // 2. Compress and optimize image using sharp (in memory)
-  const optimizedBuffer = await sharp(buffer)
-    .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 80 })
-    .toBuffer();
+    // Send the buffer to the worker
+    worker.postMessage(buffer);
+  });
 
   // 3. Upload the optimized buffer to Cloudinary
   const uploadResult = await new Promise((resolve, reject) => {
@@ -47,13 +51,14 @@ const processImage = async (buffer, originalFilename) => {
         }
       }
     );
-    stream.end(optimizedBuffer);
+    // Buffer passed via postMessage is converted back to Uint8Array/Buffer on receiving end
+    stream.end(Buffer.from(workerResult.optimizedBuffer));
   });
 
   // Return the extracted data and the Cloudinary secure URL
   return {
-    lat,
-    lng,
+    lat: workerResult.lat,
+    lng: workerResult.lng,
     imageUrl: uploadResult.secure_url,
   };
 };

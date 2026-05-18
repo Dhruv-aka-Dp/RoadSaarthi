@@ -214,44 +214,66 @@ exports.getHotspots = async (req, res, next) => {
       }
     }
 
-    const hotspots = await Report.aggregate([
+    const rawFacets = await Report.aggregate([
       {
-        $project: {
-          // Round coordinates to 2 decimal places (~1.1km precision)
-          roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
-          roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
-        },
-      },
-      {
-        $group: {
-          _id: { lng: '$roundedLng', lat: '$roundedLat' },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $match: {
-          // Only consider it a hotspot if there's more than 1 report
-          count: { $gt: 1 },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          lat: '$_id.lat',
-          lng: '$_id.lng',
-          count: 1,
-          severity: {
-            $switch: {
-              branches: [
-                { case: { $gte: ['$count', 5] }, then: 'high' },
-                { case: { $gte: ['$count', 2] }, then: 'medium' },
-              ],
-              default: 'low',
+        $facet: {
+          densityBuckets: [
+            // 1. Project and round coordinates
+            {
+              $project: {
+                roundedLng: { $round: [{ $arrayElemAt: ['$location.coordinates', 0] }, 2] },
+                roundedLat: { $round: [{ $arrayElemAt: ['$location.coordinates', 1] }, 2] },
+              },
             },
-          },
+            // 2. Group to count reports per rounded zone
+            {
+              $group: {
+                _id: { lng: '$roundedLng', lat: '$roundedLat' },
+                count: { $sum: 1 },
+              },
+            },
+            // 3. Match only zones with > 1 reports (hotspots)
+            {
+              $match: {
+                count: { $gt: 1 },
+              },
+            },
+            // 4. Bucket the zones by their count severity
+            {
+              $bucket: {
+                groupBy: '$count',
+                boundaries: [2, 5, 10000], // [2, 5) -> medium, [5, 10000) -> high
+                default: 10000,
+                output: {
+                  zones: {
+                    $push: { lat: '$_id.lat', lng: '$_id.lng', count: '$count' },
+                  },
+                },
+              },
+            },
+          ],
         },
       },
     ]);
+
+    // Flatten the buckets into the format expected by the frontend
+    const hotspots = [];
+    if (rawFacets.length > 0 && rawFacets[0].densityBuckets) {
+      rawFacets[0].densityBuckets.forEach((bucket) => {
+        let severity = 'low'; // default fallback
+        if (bucket._id === 2) severity = 'medium';
+        else if (bucket._id === 5) severity = 'high';
+
+        bucket.zones.forEach((zone) => {
+          hotspots.push({
+            lat: zone.lat,
+            lng: zone.lng,
+            count: zone.count,
+            severity,
+          });
+        });
+      });
+    }
 
     // 2. Save to cache with 10-minute TTL (600 seconds)
     if (redisClient && redisClient.isReady) {
